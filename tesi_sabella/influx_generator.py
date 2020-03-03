@@ -1,5 +1,6 @@
 import argparse
-import more_itertools as mit
+import datetime
+import glob
 import numpy as np
 from collections import defaultdict
 from functools import partial
@@ -16,18 +17,22 @@ class InfluxHostDataGenerator():
 
         self.dbclient = influxdb.InfluxDBClient(host='localhost', port=t_conf['port'])
         self.dbclient.switch_database(t_conf['db_name'])
-
-    def __len__(self):
-        if not self.cumulative:
-            raise ValueError('Cumulative flag set to False')
-        return np.sum([v.shape[0] for _, v in self.history.items()])
     
     def __getitem__(self, key):
         if not self.cumulative:
             raise ValueError('No historical data available, cumulative flag set to False')
         return self.history[key]
 
-    def category_len(self):
+    def batch_generator(self, t_cat, t_batch_size):
+        if isinstance(t_cat, list):
+            metrics = list(zip(*[self.history[c] for c in t_cat]))
+        else:
+            metrics = self.history[t_cat]
+
+        for i in range(0, len(metrics), t_batch_size):
+            yield metrics[i, i+t_batch_size]
+
+    def category_shape(self):
         if not self.cumulative:
             raise ValueError('Cumulative flag set to False')
         return np.sum({k: v.shape for k, v in self.history.items()})
@@ -50,6 +55,32 @@ class InfluxHostDataGenerator():
             if self.cumulative:
                 past_v = self.history[category]
                 self.history[category] = np.vstack([past_v, v]) if past_v.size else v
+    
+    def save(self, dname=None):
+        if not dname:
+            dname = datetime.now().strftime("%m.%d.%Y_%H.%M.%S")
+        elif dname.endswith('/'):
+            dname = dname[:-1]
+
+        with open(f'{dname}/query.txt', 'w+') as f:
+            f.write(self.query(12345))
+        
+        for k, v in self.history.items():
+            np.save(f'{dname}/{k}.npy', v)
+
+    def load(self, dname):
+        if dname.endswith('/'):
+            dname = dname[:-1]
+
+        with open(f'{dname}/query.txt') as f:
+            if f.read() != self.query(12345):
+                raise ValueError('Trying to load from different query')
+
+        self.history = {}
+        for f in glob.glob(f'{dname}/*.npy'):
+            k = f[:-4]
+            v = np.fromfile(f'{dname}/{f}')
+            self.history[k] = v
 
     def query(self, last_ts):
         """Returns an influxdb query over the metrics 
