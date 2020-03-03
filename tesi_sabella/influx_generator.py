@@ -45,16 +45,20 @@ class InfluxHostDataGenerator():
             hostname = m["tags"]["host"] 
             category = self.category_map(hostname)
             v = np.array([x[1:] for x in m["values"]])
-            diff_ts[category] = v
-            
+            if category not in diff_ts:
+                diff_ts[category] = v
+            else:
+                diff_ts[category] = np.vstack([diff_ts[category], v])
+
             # Timestamp update
             last_t = m["values"][-1][0] 
             if last_t > self.last_timestamp:
                 self.last_timestamp = last_t
-             
-            if self.cumulative:
-                past_v = self.history[category]
-                self.history[category] = np.vstack([past_v, v]) if past_v.size else v
+         
+        if self.cumulative:
+            for c, v in diff_ts.items():
+                past_v = self.history[c]
+                self.history[c] = np.vstack([past_v, v]) if past_v.size else v
         return diff_ts
     
     def save(self, dname=None):

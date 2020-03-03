@@ -12,9 +12,9 @@ query_traffic_host_tmpl = {
     'name': 'host:traffic',
     'tags': {'host': 'HOSTNAME_HERE'},
     'values': [
-        ['2020-02-28T10:52:15Z', 81, 180],
-        ['2020-02-28T10:52:45Z', 82, 181],
-        ['2020-02-28T10:53:15Z', 83, 182]]
+        [1001, 81, 180],
+        [1002, 82, 181],
+        [1003, 83, 182]]
 }
 query_traffic_tmpl = { 
     'series': [query_traffic_host_tmpl], 
@@ -42,26 +42,54 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
         # Object initialization ..... #
         self.windowsize = 15
         self.db_configuration = {"db_name": "fake-db", "port": 0000}
-        self.generator = TrafficDataGenerator(self.db_configuration, self.windowsize)
+        self.generator = TrafficDataGenerator(self.db_configuration, True)
 
     @mock.patch('influxdb.InfluxDBClient.query')
-    def test_sample_host(self, mock_query):
+    def test_poll(self, mock_query):
         # Influx measurement ..... #
         h1 = '1.2.3.4'
         h1_ts = [
-            ['2020-02-28T10:52:15Z', 81, 180], 
-            ['2020-02-28T10:52:45Z', 82, 170], 
-            ['2020-02-28T10:53:15Z', 83, 190]]
+            [1, 81, 180], 
+            [2, 82, 170], 
+            [3, 83, 190]]
         h2 = '172.0.0.1'
         h2_ts = [
-            ['2020-02-28T10:52:15Z', 10, 1], 
-            ['2020-02-28T10:52:45Z', 10, 2], 
-            ['2020-02-28T10:53:15Z', 10, 3]]
+            [2, 10, 1], 
+            [3, 10, 2], 
+            [3, 10, 3]]
         ts = np.array([x[1:] for x in (h1_ts+h2_ts)])
 
         # Patch attribute ..... #
         fake_db_result = traffic_influx_tmpl([h1, h2], [h1_ts, h2_ts])
         type(mock_query.return_value).raw = fake_db_result
 
-        sample = self.generator.poll()['generic-pc']
-        self.assertEqual(sample, ts, 'incorrect sample')
+        sample = self.generator.poll()['pc-generic']
+        self.assertCountEqual(ts.tolist(), sample.tolist(), 'incorrect sample')
+
+    @mock.patch('influxdb.InfluxDBClient.query')
+    def test_history(self, mock_query):
+        # Influx measurement ..... #
+        h1 = '1.2.3.4'
+        h1_ts = [[1, 81, 180]]
+        h2 = '172.0.0.1'
+        h2_ts = [[2, 10, 1]]
+
+        # Patch attribute ..... #
+        fake_db_result = traffic_influx_tmpl([h1, h2], [h1_ts, h2_ts])
+        type(mock_query.return_value).raw = fake_db_result
+
+        _ = self.generator.poll()
+
+        # New measurement ..... #
+        h1_ts_new = [[2, 82, 170], [3, 83, 190]]
+        h2_ts_new = [[3, 10, 2], [3, 10, 3]]
+        ts = h1_ts + h2_ts + h1_ts_new + h2_ts_new
+        ts = np.array([x[1:] for x in ts])
+
+        # Patch new attribute ..... #
+        fake_db_result = traffic_influx_tmpl([h1, h2], [h1_ts_new, h2_ts_new])
+        type(mock_query.return_value).raw = fake_db_result
+
+        _ = self.generator.poll()
+        hs = self.generator.history['pc-generic']
+        self.assertCountEqual(ts.tolist(), hs.tolist(), 'incorrect sample')

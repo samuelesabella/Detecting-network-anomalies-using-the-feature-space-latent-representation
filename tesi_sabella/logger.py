@@ -13,7 +13,7 @@ class ResultLogger():
         t = datetime.now().strftime('%m.%d.%Y_%H.%M.%S')
         self.path = f'{path}/{t}'
         if not os.path.exists(self.path):
-            os.mkdir(self.path)
+            os.makedirs(self.path)
         
         self.log_tree = defaultdict(list)
         self.tmp_batch = defaultdict(list)
@@ -25,6 +25,9 @@ class ResultLogger():
 
     def collapse(self, metrics):
         res = []
+        if isinstance(metrics, str):
+            metrics = [metrics]
+
         for m in metrics:
             meanv = np.mean(self.tmp_batch[m])
             res.append(meanv)
@@ -45,5 +48,6 @@ class ResultLogger():
             json.dump(self.log_tree, outfile)
 
     def load(self, filename):
-        d = json.load(f'{self.path}/{filename}')
+        with open(f'{self.path}/{filename}', 'r') as jsonfile:
+            d = json.load(jsonfile)
         self.log_tree = defaultdict(list, d)
