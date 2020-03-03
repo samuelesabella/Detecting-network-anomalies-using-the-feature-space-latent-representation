@@ -38,14 +38,14 @@ class InfluxHostDataGenerator():
         return np.sum({k: v.shape for k, v in self.history.items()})
 
     def poll(self):
-        host_ts = {} 
+        diff_ts = {} 
         q = self.query(self.last_timestamp)
         host_measurements = self.dbclient.query(q, epoch='ns').raw["series"]
         for m in host_measurements:
             hostname = m["tags"]["host"] 
             category = self.category_map(hostname)
             v = np.array([x[1:] for x in m["values"]])
-            host_ts[category] = v
+            diff_ts[category] = v
             
             # Timestamp update
             last_t = m["values"][-1][0] 
@@ -55,6 +55,7 @@ class InfluxHostDataGenerator():
             if self.cumulative:
                 past_v = self.history[category]
                 self.history[category] = np.vstack([past_v, v]) if past_v.size else v
+        return diff_ts
     
     def save(self, dname=None):
         if not dname:
@@ -114,8 +115,7 @@ if __name__ == '__main__':
     # Parser definition ..... #
     print('packet2ts')
     parser = argparse.ArgumentParser(description='packet2ts')
-    parser.add_argument('pcap', help='Target pcap file', nargs='?')
-    parser.add_argument('-w', '--wsize', help='window size', type=int, default=1024)
+    # parser.add_argument('pcap', help='Target pcap file', nargs='?')
     parser.add_argument('-d', '--database', help='ntop influx database name', default='ntopng')
     parser.add_argument('-p', '--port', help='influxdb port', type=int, default=8086)
 
