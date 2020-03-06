@@ -7,7 +7,7 @@ from tesi_sabella.logger import ResultLogger
 # ----- ----- ------ ----- ----- #
 class TestLogger(unittest.TestCase):
     def setUp(self):
-        self.logger = ResultLogger('test_logger_tmp/')
+        self.logger = ResultLogger('tmp/')
         
 
     def test_log(self):
@@ -29,6 +29,6 @@ class TestLogger(unittest.TestCase):
         self.logger.collapse('tr_lss')
 
         self.logger.dump('fake_training')
-        restored_logger = ResultLogger('test_logger_tmp/')
+        restored_logger = ResultLogger('tmp/')
         restored_logger.load('fake_training.log')
         self.assertEqual(np.array([2]), restored_logger.log_tree['tr_lss'], 'Stored file mismatch')
