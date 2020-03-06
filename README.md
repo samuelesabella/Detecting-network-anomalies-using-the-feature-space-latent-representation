@@ -1,4 +1,4 @@
-# influxdb population with ntopng
+# influxdb population
 Create a dummy interface named _fake_nic_
 ```
 $ sudo ip link add fake_nic type dummy
@@ -13,3 +13,11 @@ Replay packets at native speed using **tcp_replay**
 ```
 $ sudo tcpreplay -i fake_nic capture.pca
 ```
+
+# Restore influx database
+```
+docker run --rm -it -p 8086:8086 --entrypoint /bin/bash -v /absolute/path/to/backup/:/backups influxdb -c "(influxd & influxd restore -portable /backups) && influx"
+```
+
+# Dataset
+* Very small subsample, used for testing purpose: [Monday traffic from 15-16](http://bit.ly/CICIDS2017_Monday_from15to16_influx)
