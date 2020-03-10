@@ -1,4 +1,5 @@
 import argparse
+import csv
 from pprint import pprint
 import datetime
 import glob
@@ -11,6 +12,21 @@ import requests
 
 # ----- ----- PY_FLUX ----- ----- #
 # ----- ----- ------- ----- ----- #
+class FluxResponse():
+    def __init__(self, res, query):
+        self.query = query
+        csv_data = self.parse_csv(res)
+        self.keys = csv_data[3][3:]
+        self.table = [x[3:] for x in csv_data[4:]]
+
+    @staticmethod
+    def parse_csv(res):
+        restrs = res.content.decode('utf-8')
+        csv_data = csv.reader(restrs.splitlines())
+        csv_data = list(csv_data)
+        return csv_data
+
+
 class FluxQueryFrom():
     def __init__(self, bucket):
         self.query = [f'from(bucket:"{bucket}")']
@@ -32,6 +48,11 @@ class FluxQueryFrom():
         self.query.append(f'distinct(column:"{column}")')
         return self
 
+    def keep(self, columns):
+        cstr = str(columns).replace("\'", "\"")
+        self.query.append(f'keep(columns:{cstr})')
+        return self
+
     def __str__(self):
         return " |> ".join(self.query)
 
@@ -47,22 +68,23 @@ class Flux():
         self.preq = requests.Request('POST', url, headers=head)
 
     def __call__(self, q):
-        self.preq.data = q
+        self.preq.data = str(q)
         res = self.session.send(self.preq.prepare())
 
-        return res
+        return FluxResponse(res, q)
 
     def show_tag_values(self, bucket, from_measurement, with_key,
                         trange='-24h'):
         q = FluxQueryFrom(bucket).range(trange).filter(
                 '(r) => r._measurement == "host:traffic"').group([with_key]).distinct(with_key)
 
-        return self(str(q))
+        return self(q)
+
 
     def show_measurements(self, bucket, trange='-24h'):
-        q = FluxQueryFrom(bucket).range(trange).group(["_measurement"]).distinct("_measurement")
+        q = FluxQueryFrom(bucket).range(trange).group(["_measurement"]).distinct("_measurement").keep(["_value"])
 
-        return self(str(q))
+        return self(q)
 
 
 # ----- ----- HOST DATA GENERATOR ----- ----- #
@@ -130,6 +152,7 @@ class InfluxHostDataGenerator():
         elif dname.endswith('/'):
             dname = dname[:-1]
 
+        # Storing a generic query
         with open(f'{dname}/query.txt', 'w+') as f:
             f.write(self.query(12345))
 
