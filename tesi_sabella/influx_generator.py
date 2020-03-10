@@ -1,88 +1,62 @@
 import argparse
-import csv
-import pprint
 import datetime
-import glob
-import numpy as np
-from collections import defaultdict
-from pydoc import locate
-from functools import partial
-import influxdb
-import requests
 import pandas as pd
+import tesi_sabella.pyflux as flux
+import pathlib 
 
 
 # ----- ----- HOST DATA GENERATOR ----- ----- #
 # ----- ----- ------------------- ----- ----- #
-class InfluxHostDataGenerator():
-    def __init__(self, t_conf, t_cumulative=False):
+class FluxDataGenerator():
+    def __init__(self, fluxclient):
         self.last_timestamp = 0
-        self.cumulative = t_cumulative
-        self.history = defaultdict(partial(np.ndarray, 0))
+        self.history = {}
+        self.category_ts = {}
+        self.fluxclient = fluxclient
 
-        self.dbclient = influxdb.InfluxDBClient(
-            host='localhost', port=t_conf['port'])
-        self.dbclient.switch_database(t_conf['db_name'])
-
-    def __getitem__(self, key):
-        if not self.cumulative:
-            raise ValueError(
-                'No historical data available, cumulative flag set to False')
-        return self.history[key]
-
-    def batch_generator(self, t_cat, t_batch_size):
-        if isinstance(t_cat, list):
-            metrics = list(zip(*[self.history[c] for c in t_cat]))
-        else:
-            metrics = self.history[t_cat]
-
-        for i in range(0, len(metrics), t_batch_size):
-            yield metrics[i, i+t_batch_size]
-
-    def category_shape(self):
-        if not self.cumulative:
-            raise ValueError('Cumulative flag set to False')
-        return np.sum({k: v.shape for k, v in self.history.items()})
+    def category_split(self):
+        for h, ts in self.history:
+            cat = self.category_map(h)
+            if cat in self.category_ts:
+                self.category_ts[cat] = pd.cat([self.category_ts, ts])
+            else:
+                self.category_ts[cat] = ts
+        self.history = {}
 
     def poll(self):
-        diff_ts = {}
         q = self.query(self.last_timestamp)
-        host_measurements = self.dbclient.query(q, epoch='ns').raw["series"]
-        for m in host_measurements:
-            hostname = m["tags"]["host"]
-            category = self.category_map(hostname)
-            if not category:
+        new_samples = self.fluxclient(q).dframe
+
+        for ((h, _), dframe) in new_samples:
+            if not self.category_map(h):
                 continue
 
-            v = np.array([x[1:] for x in m["values"]])
-            if category not in diff_ts:
-                diff_ts[category] = v
+            if h in self.history:
+                self.history = pd.cat([self.history[h], dframe])
             else:
-                diff_ts[category] = np.vstack([diff_ts[category], v])
+                self.history[h] = dframe
 
-            # Timestamp update
-            last_t = m["values"][-1][0]
-            if last_t > self.last_timestamp:
-                self.last_timestamp = last_t
+        self.last_timestamp = max([x[0][1] for x in new_samples])
 
-        if self.cumulative:
-            for c, v in diff_ts.items():
-                past_v = self.history[c]
-                self.history[c] = np.vstack([past_v, v]) if past_v.size else v
-        return diff_ts
-
-    def save(self, dname=None):
-        if not dname:
-            dname = datetime.now().strftime("%m.%d.%Y_%H.%M.%S")
-        elif dname.endswith('/'):
-            dname = dname[:-1]
+    def save(self, datapath:pathlib.Path = None):
+        if not datapath:
+            datapath = datetime.now().strftime("%m.%d.%Y_%H.%M.%S_data")
+            datapath = pathlib.Path(datapath)
 
         # Storing a generic query
-        with open(f'{dname}/query.txt', 'w+') as f:
+        with open(datapath / 'query.txt', 'w+') as f:
             f.write(self.query(12345))
+        
+        for h, dframe_ts in self.history.items():
+            host_path = datapath / f'hosts/{h}.pkl'
+            host_path = str(host_path.absolute()) 
+            dframe_ts.to_pickle(host_path)
+        
+        for h, dframe_ts in self.category_ts.items():
+            cat_path = datapath / f'category_ts/{h}.pkl'
+            cat_path = str(cat_path.absolute()) 
+            dframe_ts.to_pickle(cat_path)
 
-        for k, v in self.history.items():
-            np.save(f'{dname}/{k}.npy', v)
 
     def load(self, dname):
         if dname.endswith('/'):
@@ -92,15 +66,12 @@ class InfluxHostDataGenerator():
             if f.read() != self.query(12345):
                 raise ValueError('Trying to load from different query')
 
-        self.history = {}
-        for f in glob.glob(f'{dname}/*.npy'):
-            k = f[:-4]
-            v = np.fromfile(f'{dname}/{f}')
-            self.history[k] = v
+        # TODO: implement file loading
+        
 
     def query(self, last_ts):
-        """Returns an influxdb query over the metrics
-        computed over multiple hosts
+        """Returns an iterable of tuple <(host, timestamp), samples>
+        with {samples} a dataframe of tuple <measurement, value>
         """
         raise NotImplementedError
 
@@ -147,7 +118,7 @@ CICIDS2017_MAC_NETMAP = {
 }
 
 
-class CICIDS2017(TrafficDataGenerator):
+class CICIDS2017(FluxDataGenerator):
     def query(self, last_ts):
         q = flux.FluxQueryFrom('CICIDS2017_Monday_from15to16/autogen')
         q.range(start=last_ts)
@@ -186,6 +157,6 @@ if __name__ == '__main__':
     # Populating influxdb using ntop and the given pcap ..... #
 
     # Logic ..... #
-    generator = TrafficDataGenerator(DBCONF, WSIZE)
+    generator = FluxDataGenerator(DBCONF, WSIZE)
     generator.poll()
     print(generator.category_len())
