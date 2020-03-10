@@ -1,3 +1,10 @@
+import csv
+import pprint
+import datetime
+import requests
+import pandas as pd
+
+
 # ----- ----- RESULT ----- ----- #
 # ----- ----- ------ ----- ----- #
 FLUX_TYPE_MAP = {
@@ -11,7 +18,7 @@ FLUX_TYPE_MAP = {
 
 
 class FluxResponse():
-    def __init__(self, res, query):
+    def __init__(self, res, query, groupby=True):
         self.query = query
         csv_data = self.parse_csv(res)
         keys = csv_data[3][3:]
@@ -22,10 +29,11 @@ class FluxResponse():
         for (k, dtype) in zip(keys, dtypes):
             dframe[k] = self.castFluxSeries(dframe[k], dtype)
         # Grouping ..... #
-        groups = csv_data[1][3:]
-        group_keys = ([k for (i, k) in enumerate(keys) if groups[i] == 'true'])
-        if len(group_keys) > 0:
-            dframe = dframe.groupby(group_keys)
+        if groupby:
+            groups = csv_data[1][3:]
+            group_keys = ([k for (i, k) in enumerate(keys) if groups[i] == 'true'])
+            if len(group_keys) > 0:
+                dframe = dframe.groupby(group_keys)
 
         self.dframe = dframe
 
@@ -118,11 +126,11 @@ class Flux():
         }
         self.preq = requests.Request('POST', url, headers=head)
 
-    def __call__(self, q):
+    def __call__(self, q, grouby=True):
         self.preq.data = str(q)
         res = self.session.send(self.preq.prepare())
 
-        return FluxResponse(res, q)
+        return FluxResponse(res, q, grouby)
 
     def show_tag_keys(self, bucket, from_measurement, trange='-48h'):
         q = FluxQueryFrom(bucket).range(trange)
