@@ -1,90 +1,15 @@
 import argparse
 import csv
-from pprint import pprint
+import pprint
 import datetime
 import glob
 import numpy as np
 from collections import defaultdict
+from pydoc import locate
 from functools import partial
 import influxdb
 import requests
-
-
-# ----- ----- PY_FLUX ----- ----- #
-# ----- ----- ------- ----- ----- #
-class FluxResponse():
-    def __init__(self, res, query):
-        self.query = query
-        csv_data = self.parse_csv(res)
-        self.keys = csv_data[3][3:]
-        self.table = [x[3:] for x in csv_data[4:]]
-
-    @staticmethod
-    def parse_csv(res):
-        restrs = res.content.decode('utf-8')
-        csv_data = csv.reader(restrs.splitlines())
-        csv_data = list(csv_data)
-        return csv_data
-
-
-class FluxQueryFrom():
-    def __init__(self, bucket):
-        self.query = [f'from(bucket:"{bucket}")']
-
-    def range(self, start='-24h', stop='now()'):
-        self.query.append(f'range(start:{start}, stop:{stop})')
-        return self
-
-    def filter(self, fn):
-        self.query.append(f'filter(fn:{fn})')
-        return self
-
-    def group(self, columns, mode='by'):
-        cstr = str(columns).replace("\'", "\"")
-        self.query.append(f'group(columns:{cstr}, mode:"{mode}")')
-        return self
-
-    def distinct(self, column):
-        self.query.append(f'distinct(column:"{column}")')
-        return self
-
-    def keep(self, columns):
-        cstr = str(columns).replace("\'", "\"")
-        self.query.append(f'keep(columns:{cstr})')
-        return self
-
-    def __str__(self):
-        return " |> ".join(self.query)
-
-
-class Flux():
-    def __init__(self, host='localhost', port=8086):
-        self.session = requests.Session()
-        url = f'http://{host}:{port}/api/v2/query'
-        head = {
-            'accept': 'application/csv',
-            'content-type': 'application/vnd.flux'
-        }
-        self.preq = requests.Request('POST', url, headers=head)
-
-    def __call__(self, q):
-        self.preq.data = str(q)
-        res = self.session.send(self.preq.prepare())
-
-        return FluxResponse(res, q)
-
-    def show_tag_values(self, bucket, from_measurement, with_key,
-                        trange='-24h'):
-        q = FluxQueryFrom(bucket).range(trange).filter(
-                '(r) => r._measurement == "host:traffic"').group([with_key]).distinct(with_key)
-
-        return self(q)
-
-
-    def show_measurements(self, bucket, trange='-24h'):
-        q = FluxQueryFrom(bucket).range(trange).group(["_measurement"]).distinct("_measurement").keep(["_value"])
-
-        return self(q)
+import pandas as pd
 
 
 # ----- ----- HOST DATA GENERATOR ----- ----- #
@@ -185,55 +110,53 @@ class InfluxHostDataGenerator():
         raise NotImplementedError
 
 
-class TrafficDataGenerator(InfluxHostDataGenerator):
-    def category_map(self, _):
-        return 'pc-generic'
+# ----- ----- CICIDS2017 ----- ----- #
+# ----- ----- ---------- ----- ----- #
+CICIDS2017_IPV4_NETMAP = {
+    "192.168.10.3": "server",
+    "192.168.10.50": "server",
+    "192.168.10.51": "server",
 
-    def query(self, last_ts):
-        """Bytes sent and received by a host since last query
-        """
-        return ('SELECT "bytes_rcvd", "bytes_sent" '
-                'FROM "host:traffic" '
-                f'WHERE time > {last_ts} '
-                'GROUP BY "host"'
-                'ORDER BY time ASC')
+    "192.168.10.19": "pc",
+    "192.168.10.17": "pc",
+    "192.168.10.16": "pc",
+    "192.168.10.12": "pc",
+    "192.168.10.9": "pc",
+    "192.168.10.5": "pc",
+    "192.168.10.8": "pc",
+    "192.168.10.14": "pc",
+    "192.168.10.15": "pc",
+    "192.168.10.25": "pc",
+}
+
+CICIDS2017_MAC_NETMAP = {
+    "18:66:DA:9B:E3:7D": "server",
+    "00:19:B9:0A:69:F1": "server",
+    "B8:AC:6F:36:0B:A8": "server",
+
+    "00:23:AE:9B:AD:B3": "pc",
+    "00:23:AE:9B:95:67": "pc",
+    "00:23:AE:9B:8A:BF": "pc",
+    "B8:AC:6F:36:04:E3": "pc",
+    "B8:AC:6F:1D:1F:6C": "pc",
+    "B8:AC:6F:36:0A:8B": "pc",
+    "B8:AC:6F:36:08:F5": "pc",
+    "B8:AC:6F:36:07:EE": "pc",
+    "00:1E:4F:D4:CA:28": "pc",
+    "00:25:00:A8:C4:60": "pc",
+}
 
 
 class CICIDS2017(TrafficDataGenerator):
-    def __init__(self, *args, **kwargs):
-        super(CICIDS2017, self).__init__(*args, **kwargs)
-        self.ipv4_netmap = {
-            "192.168.10.3": "server",
-            "192.168.10.50": "server",
-            "192.168.10.51": "server",
-
-            "192.168.10.19": "pc",
-            "192.168.10.17": "pc",
-            "192.168.10.16": "pc",
-            "192.168.10.12": "pc",
-            "192.168.10.9": "pc",
-            "192.168.10.5": "pc",
-            "192.168.10.8": "pc",
-            "192.168.10.14": "pc",
-            "192.168.10.15": "pc",
-            "192.168.10.25": "pc",
-        }
-        self.mac_netmap = {
-            "18:66:DA:9B:E3:7D": "server",
-            "00:19:B9:0A:69:F1": "server",
-            "B8:AC:6F:36:0B:A8": "server",
-
-            "00:23:AE:9B:AD:B3": "pc",
-            "00:23:AE:9B:95:67": "pc",
-            "00:23:AE:9B:8A:BF": "pc",
-            "B8:AC:6F:36:04:E3": "pc",
-            "B8:AC:6F:1D:1F:6C": "pc",
-            "B8:AC:6F:36:0A:8B": "pc",
-            "B8:AC:6F:36:08:F5": "pc",
-            "B8:AC:6F:36:07:EE": "pc",
-            "00:1E:4F:D4:CA:28": "pc",
-            "00:25:00:A8:C4:60": "pc",
-        }
+    def query(self, last_ts):
+        q = flux.FluxQueryFrom('CICIDS2017_Monday_from15to16/autogen')
+        q.range(start=last_ts)
+        q.filter('(r) => r._measurement == "host:traffic" '
+                 'or r._measurement == "host:udp_pkts" '
+                 'or r._measurement == "dns_qry_rcvd_rsp_sent" ')
+        q.aggregateWindow(every='1h', fn='mean')
+        q.drop(columns=['_start', '_stop', 'ifid'])
+        q.group(columns=["_time", "host"])
 
     def category_map(self, hostname):
         if hostname in self.ipv4_netmap:
