@@ -38,13 +38,21 @@ class FluxResponse():
         self.dframe = dframe
 
     @staticmethod
+    def rfc33392datatime(s):
+        if len(s.split('.')) > 1:
+            return pd.to_datetime(s, format='%Y-%m-%dT%H:%M:%S.%fZ')
+        return pd.to_datetime(s, format='%Y-%m-%dT%H:%M:%SZ')
+
+    
+    @staticmethod
     def castFluxSeries(pd_series, str_fluxtype):
         if str_fluxtype in FLUX_TYPE_MAP:
             pd_series[pd_series == ''] = None
             ptype = FLUX_TYPE_MAP[str_fluxtype]
             return pd_series.astype(ptype)
         if str_fluxtype == 'dateTime:RFC3339':
-            return pd_series.apply(lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%SZ'))
+            return pd_series.apply(FluxResponse.rfc33392datatime)
+        return pd_series
 
     @staticmethod
     def parse_csv(res):
@@ -79,7 +87,8 @@ class FluxQueryFrom():
     def drop(self, columns=None, fn=None):
         if not (columns or fn):
             raise ValueError("No dropping method specified")
-        elif columns:
+
+        if columns:
             self.query.append(f'drop(columns:{columns})')
         else:
             self.query.append(f'drop(fn:{fn})')
@@ -134,13 +143,13 @@ class Flux():
 
     def show_tag_keys(self, bucket, from_measurement, trange='-48h'):
         q = FluxQueryFrom(bucket).range(trange)
-        q.filter('(r) => r._measurement == "host:traffic"')
+        q.filter(f'(r) => r._measurement == "{from_measurement}"')
         q.keep(["_field"]).keys().keep(["_field"])
         return self(q)
 
     def show_tag_values(self, bucket, from_measurement, with_key, trange='-48h'):
         q = FluxQueryFrom(bucket).range(trange)
-        q.filter('(r) => r._measurement == "host:traffic"')
+        q.filter(f'(r) => r._measurement == "{from_measurement}"')
         q.group([with_key]).distinct(with_key)
         return self(q)
 

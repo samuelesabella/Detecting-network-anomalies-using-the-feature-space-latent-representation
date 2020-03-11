@@ -2,6 +2,7 @@ import argparse
 import datetime
 import pandas as pd
 import tesi_sabella.pyflux as flux
+import os
 import pathlib 
 
 
@@ -9,34 +10,21 @@ import pathlib
 # ----- ----- ------------------- ----- ----- #
 class FluxDataGenerator():
     def __init__(self, fluxclient):
-        self.last_timestamp = 0
-        self.history = {}
-        self.category_ts = {}
+        self.last_timestamp = '-48h'
+        self.samples = None
         self.fluxclient = fluxclient
 
-    def category_split(self):
-        for h, ts in self.history:
-            cat = self.category_map(h)
-            if cat in self.category_ts:
-                self.category_ts[cat] = pd.cat([self.category_ts, ts])
-            else:
-                self.category_ts[cat] = ts
-        self.history = {}
+    def toPandas(self):
+        return self.samples
 
     def poll(self):
         q = self.query(self.last_timestamp)
-        new_samples = self.fluxclient(q).dframe
-
-        for ((h, _), dframe) in new_samples:
-            if not self.category_map(h):
-                continue
-
-            if h in self.history:
-                self.history = pd.cat([self.history[h], dframe])
-            else:
-                self.history[h] = dframe
-
-        self.last_timestamp = max([x[0][1] for x in new_samples])
+        new_samples = self.fluxclient(q, grouby=False).dframe
+        new_samples['device_category'] = new_samples.apply(self.category_map, axis=1)
+        new_samples = new_samples.dropna(subset=['device_category']) 
+        self.samples = pd.concat([self.samples, new_samples])
+        self.last_timestamp = max(new_samples['_time'])
+        return self.last_timestamp
 
     def save(self, datapath:pathlib.Path = None):
         if not datapath:
@@ -47,27 +35,13 @@ class FluxDataGenerator():
         with open(datapath / 'query.txt', 'w+') as f:
             f.write(self.query(12345))
         
-        for h, dframe_ts in self.history.items():
-            host_path = datapath / f'hosts/{h}.pkl'
-            host_path = str(host_path.absolute()) 
-            dframe_ts.to_pickle(host_path)
-        
-        for h, dframe_ts in self.category_ts.items():
-            cat_path = datapath / f'category_ts/{h}.pkl'
-            cat_path = str(cat_path.absolute()) 
-            dframe_ts.to_pickle(cat_path)
+        self.samples.to_pickle(datapath / 'timeseries.pkl')
 
-
-    def load(self, dname):
-        if dname.endswith('/'):
-            dname = dname[:-1]
-
-        with open(f'{dname}/query.txt') as f:
+    def load(self, dname:pathlib.Path):
+        with open(dname / 'query.txt') as f:
             if f.read() != self.query(12345):
                 raise ValueError('Trying to load from different query')
-
-        # TODO: implement file loading
-        
+        self.samples = pd.read_pickle(dname / 'timeseries.pkl')
 
     def query(self, last_ts):
         """Returns an iterable of tuple <(host, timestamp), samples>
@@ -75,8 +49,9 @@ class FluxDataGenerator():
         """
         raise NotImplementedError
 
-    def category_map(self, host):
-        """Return the category, given a host
+    def category_map(self, qres_row):
+        """Returns the category of a device given a sample
+        from a flux query result. Devices with {None} category are ignored
         """
         raise NotImplementedError
 
@@ -118,9 +93,13 @@ CICIDS2017_MAC_NETMAP = {
 }
 
 
-class CICIDS2017(FluxDataGenerator):
+class CICIDS2017_Generator(FluxDataGenerator):
+    def __init__(self, bucket, *args, **kwargs):
+        super(CICIDS2017_Generator, self).__init__(*args, **kwargs)
+        self.bucket = bucket
+
     def query(self, last_ts):
-        q = flux.FluxQueryFrom('CICIDS2017_Monday_from15to16/autogen')
+        q = flux.FluxQueryFrom(self.bucket)
         q.range(start=last_ts)
         q.filter('(r) => r._measurement == "host:traffic" '
                  'or r._measurement == "host:udp_pkts" '
@@ -128,12 +107,14 @@ class CICIDS2017(FluxDataGenerator):
         q.aggregateWindow(every='1h', fn='mean')
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
+        return q
 
-    def category_map(self, hostname):
-        if hostname in self.ipv4_netmap:
-            return self.ipv4_netmap[hostname]
-        elif hostname in self.mac_netmap:
-            return self.mac_netmap[hostname]
+    def category_map(self, qres_row):
+        hostname = qres_row['host']
+        if hostname in CICIDS2017_IPV4_NETMAP:
+            return CICIDS2017_IPV4_NETMAP[hostname]
+        if hostname in CICIDS2017_MAC_NETMAP:
+            return CICIDS2017_MAC_NETMAP[hostname]
         return None
 
 
@@ -150,13 +131,6 @@ if __name__ == '__main__':
 
     # Parser call ..... #
     args = parser.parse_args()
-    WSIZE = args.wsize
-    DBCONF = {"port": args.port, "db_name": args.database}
-    pcap = args.pcap
-
-    # Populating influxdb using ntop and the given pcap ..... #
-
-    # Logic ..... #
-    generator = FluxDataGenerator(DBCONF, WSIZE)
+    fclient = flux.Flux(port=args.port)
+    generator = CICIDS2017_Generator('CICIDS2017_Monday_from15to16/autogen', fclient)
     generator.poll()
-    print(generator.category_len())
