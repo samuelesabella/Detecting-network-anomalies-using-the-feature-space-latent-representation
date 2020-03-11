@@ -2,23 +2,24 @@ import argparse
 import datetime
 import pandas as pd
 import tesi_sabella.pyflux as flux
-import os
 import pathlib 
 
 
 # ----- ----- HOST DATA GENERATOR ----- ----- #
 # ----- ----- ------------------- ----- ----- #
 class FluxDataGenerator():
-    def __init__(self, fluxclient):
-        self.last_timestamp = '-48h'
+    def __init__(self, fluxclient, start):
+        self.last_timestamp = start
         self.samples = None
         self.fluxclient = fluxclient
 
     def toPandas(self):
         return self.samples
 
-    def poll(self):
-        q = self.query(self.last_timestamp)
+    def poll(self, start=None, stop=None):
+        if not start:
+            start = self.last_timestamp
+        q = self.query(start, stop)
         new_samples = self.fluxclient(q, grouby=False).dframe
         new_samples['device_category'] = new_samples.apply(self.category_map, axis=1)
         new_samples = new_samples.dropna(subset=['device_category']) 
@@ -43,7 +44,7 @@ class FluxDataGenerator():
                 raise ValueError('Trying to load from different query')
         self.samples = pd.read_pickle(dname / 'timeseries.pkl')
 
-    def query(self, last_ts):
+    def query(self, start, stop=None):
         """Returns an iterable of tuple <(host, timestamp), samples>
         with {samples} a dataframe of tuple <measurement, value>
         """
@@ -93,14 +94,14 @@ CICIDS2017_MAC_NETMAP = {
 }
 
 
-class CICIDS2017_Generator(FluxDataGenerator):
+class ntop_Generator(FluxDataGenerator):
     def __init__(self, bucket, *args, **kwargs):
-        super(CICIDS2017_Generator, self).__init__(*args, **kwargs)
+        super(ntop_Generator, self).__init__(*args, **kwargs)
         self.bucket = bucket
 
-    def query(self, last_ts):
+    def query(self, start, stop=None):
         q = flux.FluxQueryFrom(self.bucket)
-        q.range(start=last_ts)
+        q.range(start=start, stop=stop)
         q.filter('(r) => r._measurement == "host:traffic" '
                  'or r._measurement == "host:udp_pkts" '
                  'or r._measurement == "dns_qry_rcvd_rsp_sent" ')
@@ -108,6 +109,10 @@ class CICIDS2017_Generator(FluxDataGenerator):
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
         return q
+
+    def toPandas(self):
+        groups =  ['device_category', 'host', '_time', '_field']
+        return self.samples.groupby(groups)['_value'].sum(min_count=1).unstack('_field')
 
     def category_map(self, qres_row):
         hostname = qres_row['host']

@@ -71,7 +71,9 @@ class FluxQueryFrom():
     def __init__(self, bucket):
         self.query = [f'from(bucket:"{bucket}")']
 
-    def range(self, start='-24h', stop='now()'):
+    def range(self, start, stop=None):
+        if not stop:
+            stop = 'now()'
         self.query.append(f'range(start:{start}, stop:{stop})')
         return self
 
