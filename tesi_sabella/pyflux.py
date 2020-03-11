@@ -47,7 +47,7 @@ class FluxResponse():
     @staticmethod
     def castFluxSeries(pd_series, str_fluxtype):
         if str_fluxtype in FLUX_TYPE_MAP:
-            pd_series[pd_series == ''] = None
+            pd_series.loc[pd_series == ''] = None
             ptype = FLUX_TYPE_MAP[str_fluxtype]
             return pd_series.astype(ptype)
         if str_fluxtype == 'dateTime:RFC3339':

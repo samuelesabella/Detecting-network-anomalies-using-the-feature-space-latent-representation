@@ -94,6 +94,20 @@ CICIDS2017_MAC_NETMAP = {
 }
 
 
+ntophost_measurements = [
+    "host:udp_pkts", "host:active_flows",
+    "host:contacts", "host:dns_qry_rcvd_rsp_sent",
+    "host:dns_qry_sent_rsp_rcvd", "host:echo_packets",
+    "host:echo_reply_packets", "host:engaged_alerts",
+    "host:host_unreachable_flows", "host:l4protos",
+    "host:misbehaving_flows", "host:score",
+    "host:tcp_packets", "host:tcp_rx_stats",
+    "host:tcp_tx_stats", "host:total_alerts",
+    "host:total_flow_alerts", "host:total_flows",
+    "host:traffic", "host:udp_pkts",
+    "host:udp_sent_unicast", "host:unreachable_flows",
+    "host:ndpi", "host:ndpi_flows"]
+
 class ntop_Generator(FluxDataGenerator):
     def __init__(self, bucket, *args, **kwargs):
         super(ntop_Generator, self).__init__(*args, **kwargs)
@@ -102,9 +116,13 @@ class ntop_Generator(FluxDataGenerator):
     def query(self, start, stop=None):
         q = flux.FluxQueryFrom(self.bucket)
         q.range(start=start, stop=stop)
-        q.filter('(r) => r._measurement == "host:traffic" '
-                 'or r._measurement == "host:udp_pkts" '
-                 'or r._measurement == "dns_qry_rcvd_rsp_sent" ')
+
+        # filtering ..... #
+        host_filter = '(r) => ' 
+        measurement_or = ''.join([f'or r._measurement == "{x}" ' for x in ntophost_measurements]) 
+        host_filter += measurement_or[3:]
+        q.filter(host_filter)
+
         q.aggregateWindow(every='1h', fn='mean')
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
