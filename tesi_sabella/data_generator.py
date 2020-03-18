@@ -1,7 +1,7 @@
 import argparse
 import datetime
 import pandas as pd
-import tesi_sabella.pyflux as flux
+import tesi_sabella.pyFluxClient.pyfluxclient as flux
 import pathlib 
 
 
@@ -21,6 +21,8 @@ class FluxDataGenerator():
             start = self.last_timestamp
         q = self.query(start, stop)
         new_samples = self.fluxclient(q, grouby=False).dframe
+        if new_samples is None:
+            return None
         new_samples['device_category'] = new_samples.apply(self.category_map, axis=1)
         new_samples = new_samples.dropna(subset=['device_category']) 
         self.samples = pd.concat([self.samples, new_samples])
@@ -109,9 +111,10 @@ ntophost_measurements = [
     "host:ndpi", "host:ndpi_flows"]
 
 class ntop_Generator(FluxDataGenerator):
-    def __init__(self, bucket, *args, **kwargs):
+    def __init__(self, bucket, windowsize, *args, **kwargs):
         super(ntop_Generator, self).__init__(*args, **kwargs)
         self.bucket = bucket
+        self.windowsize = windowsize
 
     def query(self, start, stop=None):
         q = flux.FluxQueryFrom(self.bucket)
@@ -123,7 +126,7 @@ class ntop_Generator(FluxDataGenerator):
         host_filter += measurement_or[3:]
         q.filter(host_filter)
 
-        q.aggregateWindow(every='1h', fn='mean')
+        q.aggregateWindow(every=self.windowsize, fn='mean')
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
         return q
@@ -154,6 +157,6 @@ if __name__ == '__main__':
 
     # Parser call ..... #
     args = parser.parse_args()
-    fclient = flux.Flux(port=args.port)
+    fclient = flux.FluxClient(port=args.port)
     generator = CICIDS2017_Generator('CICIDS2017_Monday_from15to16/autogen', fclient)
     generator.poll()
