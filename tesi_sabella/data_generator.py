@@ -132,8 +132,9 @@ class ntop_Generator(FluxDataGenerator):
         return q
 
     def toPandas(self):
-        groups =  ['device_category', 'host', '_time', '_field']
-        return self.samples.groupby(groups)['_value'].sum(min_count=1).unstack('_field')
+        self.samples['_key'] = self.samples['_measurement'].str.replace('host:', '') + ':' + self.samples['_field']
+        groups =  ['device_category', 'host', '_time', '_key']
+        return self.samples.groupby(groups)['_value'].sum(min_count=1).unstack('_key')
 
     def category_map(self, qres_row):
         hostname = qres_row['host']
