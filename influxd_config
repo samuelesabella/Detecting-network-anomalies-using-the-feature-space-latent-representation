@@ -1,0 +1,25 @@
+[meta]
+  dir = "/var/lib/influxdb/meta"
+
+[data]
+  dir = "/var/lib/influxdb/data"
+  engine = "tsm1"
+  wal-dir = "/var/lib/influxdb/wal"
+  cache-max-memory-size = "10g"
+  max-select-series = 0
+  cache-snapshot-memory-size = 0
+
+[coordinator]
+  max-concurrent-queries = 0
+  query-timeout = "0"
+  log-queries-after = "0"
+  max-select-point = 0
+  max-select-series = 0
+  max-select-buckets = 0
+
+[http]
+  flux-enabled = true
+
+[subscriber]
+  http-timeout = "30m"
+  write-buffer-size = 10000

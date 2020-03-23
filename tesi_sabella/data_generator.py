@@ -1,7 +1,11 @@
 import argparse
+import signal
+import sys
+from datetime import datetime
+import time
 import datetime
 import pandas as pd
-import tesi_sabella.pyFluxClient.pyfluxclient as flux
+import pyfluxc as flux
 import pathlib 
 
 
@@ -98,20 +102,6 @@ CICIDS2017_MAC_NETMAP = {
 }
 
 
-ntophost_measurements = [
-    "host:udp_pkts", "host:active_flows",
-    "host:contacts", "host:dns_qry_rcvd_rsp_sent",
-    "host:dns_qry_sent_rsp_rcvd", "host:echo_packets",
-    "host:echo_reply_packets", "host:engaged_alerts",
-    "host:host_unreachable_flows", "host:l4protos",
-    "host:misbehaving_flows", "host:score",
-    "host:tcp_packets", "host:tcp_rx_stats",
-    "host:tcp_tx_stats", "host:total_alerts",
-    "host:total_flow_alerts", "host:total_flows",
-    "host:traffic", "host:udp_pkts",
-    "host:udp_sent_unicast", "host:unreachable_flows",
-    "host:ndpi", "host:ndpi_flows"]
-
 class ntop_Generator(FluxDataGenerator):
     def __init__(self, bucket, windowsize, *args, **kwargs):
         super(ntop_Generator, self).__init__(*args, **kwargs)
@@ -121,13 +111,7 @@ class ntop_Generator(FluxDataGenerator):
     def query(self, start, stop=None):
         q = flux.FluxQueryFrom(self.bucket)
         q.range(start=start, stop=stop)
-
-        # filtering ..... #
-        host_filter = '(r) => ' 
-        measurement_or = ''.join([f'or r._measurement == "{x}" ' for x in ntophost_measurements]) 
-        host_filter += measurement_or[3:]
-        q.filter(host_filter)
-
+        q.filter('(r) => r._measurement =~ /host:.*/')
         q.aggregateWindow(every=self.windowsize, fn='mean')
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
@@ -144,7 +128,7 @@ class ntop_Generator(FluxDataGenerator):
             return CICIDS2017_IPV4_NETMAP[hostname]
         if hostname in CICIDS2017_MAC_NETMAP:
             return CICIDS2017_MAC_NETMAP[hostname]
-        return None
+        return "unknown device class"
 
 
 # ----- ----- CLI ----- ----- #
@@ -153,13 +137,30 @@ if __name__ == '__main__':
     # Parser definition ..... #
     print('packet2ts')
     parser = argparse.ArgumentParser(description='packet2ts')
-    parser.add_argument('-d', '--database',
+    parser.add_argument('-d', '--bucket',
                         help='ntop influx database name', default='ntopng')
     parser.add_argument('-p', '--port', help='influxdb port',
                         type=int, default=8086)
-
-    # Parser call ..... #
     args = parser.parse_args()
-    fclient = flux.FluxClient(port=args.port)
-    generator = CICIDS2017_Generator('CICIDS2017_Monday_from15to16/autogen', fclient)
-    generator.poll()
+    
+    fclient = flux.FluxClient(port=args.port); 
+    cicids2017 = ntop_Generator(args.bucket, '30s', fclient, fclient.now())
+
+    running = True
+    def signal_handler(*args):
+        running = False
+    signal.signal(signal.SIGINT, signal_handler)
+
+    while running: 
+        cicids2017.poll()
+        time.sleep(60 * 5)
+    
+    df = cicids2017.toPandas()
+    # Fix score which is default NaN
+    df_clean = df.fillna({"score:score": 0})
+    # Dropping
+    nans_count = df_clean[df_clean.isnull().any(axis=1)]
+    print(f'Dropped NaNs count: {len(nans_count)}')
+    df_clean = df_clean.dropna()
+
+    df_clean.to_pickle(f'{args.bucket}__{datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}.pkl')
