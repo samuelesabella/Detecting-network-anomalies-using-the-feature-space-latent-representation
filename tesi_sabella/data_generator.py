@@ -117,6 +117,7 @@ class ntop_Generator(FluxDataGenerator):
         q.aggregateWindow(every=self.windowsize, fn='mean')
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
+        import pdb; pdb.set_trace() 
         return q
 
     def poll(self, **kwargs):
@@ -168,10 +169,13 @@ if __name__ == '__main__':
                         help='ntop influx database name', default='ntopng')
     parser.add_argument('-p', '--port', help='influxdb port',
                         type=int, default=8086)
+    parser.add_argument('-e', '--every', help="poll every x seconds",
+                        type=int, default=15)
     args = parser.parse_args()
     
     fclient = flux.FluxClient(port=args.port); 
-    cicids2017 = ntop_Generator(args.bucket, '30s', fclient, pd.datetime.now())
+    start = pd.Timestamp.now() - pd.DateOffset(minutes=args.every)
+    cicids2017 = ntop_Generator(args.bucket, '30s', fclient, start)
 
     running = True
     def signal_handler(*args):
