@@ -169,12 +169,12 @@ if __name__ == '__main__':
                         help='ntop influx database name', default='ntopng')
     parser.add_argument('-p', '--port', help='influxdb port',
                         type=int, default=8086)
-    parser.add_argument('-e', '--every', help="poll every x seconds",
+    parser.add_argument('-e', '--every', help="poll every x minutes",
                         type=int, default=15)
     parser.add_argument('-o', '--output', help="output file name")
     args = parser.parse_args()
     if args.output is None:
-        args.output = f"{args.bucket}__{datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}"
+        args.output = f"{args.bucket}__{datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}.pkl"
     
     fclient = flux.FluxClient(port=args.port); 
     start = pd.Timestamp.now() - pd.DateOffset(minutes=args.every)
@@ -188,6 +188,6 @@ if __name__ == '__main__':
     while running:
         cicids2017.poll()
         df = cicids2017.to_pandas()
-        df.to_pickle(f'.pkl')
+        df.to_pickle(args.output)
         time.sleep(60 * args.every)
     
