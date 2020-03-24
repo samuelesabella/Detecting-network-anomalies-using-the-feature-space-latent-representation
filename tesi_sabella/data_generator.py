@@ -165,7 +165,7 @@ if __name__ == '__main__':
     # Parser definition ..... #
     print('packet2ts')
     parser = argparse.ArgumentParser(description='packet2ts')
-    parser.add_argument('-d', '--bucket',
+    parser.add_argument('-b', '--bucket',
                         help='ntop influx database name', default='ntopng')
     parser.add_argument('-p', '--port', help='influxdb port',
                         type=int, default=8086)
@@ -174,7 +174,7 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', help="output file name")
     args = parser.parse_args()
     if args.output is None:
-        args.output = f"{args.bucket}__{datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}.pkl"
+        args.output = f"{args.bucket}__{datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}.pkl"
     
     fclient = flux.FluxClient(port=args.port); 
     start = pd.Timestamp.now() - pd.DateOffset(minutes=args.every)
@@ -190,4 +190,4 @@ if __name__ == '__main__':
         df = cicids2017.to_pandas()
         df.to_pickle(args.output)
         time.sleep(60 * args.every)
-    
+        print(f"Polled at: {datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}")
