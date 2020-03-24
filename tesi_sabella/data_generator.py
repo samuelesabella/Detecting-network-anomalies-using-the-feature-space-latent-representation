@@ -18,7 +18,7 @@ class FluxDataGenerator():
         self.samples = None
         self.fluxclient = fluxclient
 
-    def toPandas(self):
+    def to_pandas(self):
         return self.samples
 
     def poll(self, start=None, stop=None):
@@ -141,10 +141,13 @@ class ntop_Generator(FluxDataGenerator):
                 logging.warning(f"Blind spots for {host}: {measurement}\n {blind_spot}")
         return last_timestamp
 
-    def toPandas(self):
+    def to_pandas(self):
         self.samples['_key'] = self.samples['_measurement'].str.replace('host:', '') + ':' + self.samples['_field']
         groups =  ['device_category', 'host', '_time', '_key']
-        return self.samples.groupby(groups)['_value'].sum(min_count=1).unstack('_key')
+        df = self.samples.groupby(groups)['_value'].sum(min_count=1).unstack('_key')
+        # Cleaning the dataset
+        df_clean = df.fillna({"score:score": 0})
+        return df_clean.dropna()
 
     def category_map(self, qres_row):
         hostname = qres_row['host']
@@ -168,23 +171,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     fclient = flux.FluxClient(port=args.port); 
-    cicids2017 = ntop_Generator(args.bucket, '30s', fclient, fclient.now())
+    cicids2017 = ntop_Generator(args.bucket, '30s', fclient, pd.datetime.now())
 
     running = True
     def signal_handler(*args):
         running = False
     signal.signal(signal.SIGINT, signal_handler)
 
-    while running: 
+    while running:
         cicids2017.poll()
         time.sleep(60 * 5)
     
-    df = cicids2017.toPandas()
-    # Fix score which is default NaN
-    df_clean = df.fillna({"score:score": 0})
-    # Dropping
-    nans_count = df_clean[df_clean.isnull().any(axis=1)]
-    print(f'Dropped NaNs count: {len(nans_count)}')
-    df_clean = df_clean.dropna()
-
+    df = cicids2017.to_pandas()
     df_clean.to_pickle(f'{args.bucket}__{datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}.pkl')
