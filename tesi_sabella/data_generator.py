@@ -1,3 +1,4 @@
+import sys
 import argparse
 import re
 import numpy as np
@@ -6,9 +7,11 @@ import signal
 from datetime import datetime
 import time
 import pandas as pd
-import pyfluxc as flux
+import pyfluxc.pyfluxc.pyfluxc as flux 
 import pathlib 
 
+import importlib
+importlib.reload(flux)
 
 # ----- ----- HOST DATA GENERATOR ----- ----- #
 # ----- ----- ------------------- ----- ----- #
@@ -117,11 +120,10 @@ class ntop_Generator(FluxDataGenerator):
         q.aggregateWindow(every=self.windowsize, fn='mean')
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
-        import pdb; pdb.set_trace() 
         return q
 
     def poll(self, **kwargs):
-        wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', '15s').groups() 
+        wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', self.windowsize).groups() 
 
         last_timestamp, new_samples = super().poll(**kwargs)
         # Showing blind spots
@@ -176,18 +178,17 @@ if __name__ == '__main__':
     if args.output is None:
         args.output = f"{args.bucket}__{datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}.pkl"
     
-    fclient = flux.FluxClient(port=args.port); 
-    start = pd.Timestamp.now() - pd.DateOffset(minutes=args.every)
+    fclient = flux.FluxClient(host='127.0.0.1', port=args.port); 
+    start = pd.Timestamp.utcnow() - pd.DateOffset(minutes=args.every)
     cicids2017 = ntop_Generator(args.bucket, '30s', fclient, start)
 
-    running = True
-    def signal_handler(*args):
-        running = False
-    signal.signal(signal.SIGINT, signal_handler)
-
-    while running:
-        cicids2017.poll()
-        df = cicids2017.to_pandas()
-        df.to_pickle(args.output)
-        time.sleep(60 * args.every)
-        print(f"Polled at: {datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}")
+    while True:
+        try:
+            cicids2017.poll()
+            df = cicids2017.to_pandas()
+            df.to_pickle(args.output)
+            print(f'Polled at: {datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}')
+            time.sleep(60 * args.every)
+        except KeyboardInterrupt:
+            print('Closing capture')
+            break
