@@ -1,9 +1,10 @@
 import argparse
+import re
+import numpy as np
+import logging
 import signal
-import sys
 from datetime import datetime
 import time
-import datetime
 import pandas as pd
 import pyfluxc as flux
 import pathlib 
@@ -31,7 +32,8 @@ class FluxDataGenerator():
         new_samples = new_samples.dropna(subset=['device_category']) 
         self.samples = pd.concat([self.samples, new_samples])
         self.last_timestamp = max(new_samples['_time'])
-        return self.last_timestamp
+
+        return self.last_timestamp, new_samples
 
     def save(self, datapath:pathlib.Path = None):
         if not datapath:
@@ -116,6 +118,28 @@ class ntop_Generator(FluxDataGenerator):
         q.drop(columns=['_start', '_stop', 'ifid'])
         q.group(columns=["_time", "host"])
         return q
+
+    def poll(self, **kwargs):
+        wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', '15s').groups() 
+
+        last_timestamp, new_samples = super().poll(**kwargs)
+        # Showing blind spots
+        g = new_samples.groupby(['host', '_measurement', '_field'])
+        for name, group in g:
+            host = name[0]
+            measurement = '->'.join(name[1:])
+            times = group['_time'].sort_values(ascending=True)
+            
+            delta = np.diff(times.values)
+            blind_spot = [(*times[i:i+2], x_delta) for i, x_delta in enumerate(delta)]
+            blind_spot = filter(lambda x: x[2] > np.timedelta64(wndsize_val, wndsize_unit), blind_spot)
+            one_second = np.timedelta64(1000000000, 'ns')
+            blind_spot = [(*x[:2], x[2] / one_second) for x in blind_spot]
+            blind_spot = pd.DataFrame(blind_spot, columns=["start", "stop", "seconds"])
+            
+            if len(blind_spot) > 0:
+                logging.warning(f"Blind spots for {host}: {measurement}\n {blind_spot}")
+        return last_timestamp
 
     def toPandas(self):
         self.samples['_key'] = self.samples['_measurement'].str.replace('host:', '') + ':' + self.samples['_field']
