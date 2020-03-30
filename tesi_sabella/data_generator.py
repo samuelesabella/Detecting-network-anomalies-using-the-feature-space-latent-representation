@@ -1,9 +1,7 @@
-import sys
 import argparse
 import re
 import numpy as np
 import logging
-import signal
 from datetime import datetime
 import time
 import pandas as pd
@@ -13,15 +11,22 @@ import pathlib
 import importlib
 importlib.reload(flux)
 
+
 # ----- ----- HOST DATA GENERATOR ----- ----- #
 # ----- ----- ------------------- ----- ----- #
 class FluxDataGenerator():
-    def __init__(self, fluxclient, start):
+    def __init__(self, bucket, windowsize, fluxclient, start):
         self.last_timestamp = start
         self.samples = None
         self.fluxclient = fluxclient
+        self.bucket = bucket
+        self.windowsize = windowsize
+        wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', self.windowsize).groups() 
+        self.window_timedelta = np.timedelta64(wndsize_val, wndsize_unit)
 
     def to_pandas(self):
+        if self.samples is None:
+            raise ValueError('No samples available')
         return self.samples
 
     def poll(self, start=None, stop=None):
@@ -31,10 +36,22 @@ class FluxDataGenerator():
         new_samples = self.fluxclient(q, grouby=False).dframe
         if new_samples is None:
             return None
+
         new_samples['device_category'] = new_samples.apply(self.category_map, axis=1)
-        new_samples = new_samples.dropna(subset=['device_category']) 
+        new_samples['_key'] = new_samples['_measurement'].str.replace('host:', '') + ':' + new_samples['_field']
+        groups =  ['device_category', 'host', '_time', '_key']
+        new_samples = new_samples.groupby(groups)['_value'].sum(min_count=1).unstack('_key')
+        new_samples = new_samples.fillna({"score:score": 0})
+
+        self.check_jumps(new_samples.dropna(), new_samples, q)
+        
+        new_samples = new_samples.dropna() 
+
         self.samples = pd.concat([self.samples, new_samples])
-        self.last_timestamp = max(new_samples['_time'])
+
+        # ----- POSSIBLE BUG ----- #
+        self.last_timestamp = pd.Timestamp.utcnow()
+        # ----- POSSIBLE BUG ----- #
 
         return self.last_timestamp, new_samples
 
@@ -56,16 +73,52 @@ class FluxDataGenerator():
         self.samples = pd.read_pickle(dname / 'timeseries.pkl')
 
     def query(self, start, stop=None):
-        """Returns an iterable of tuple <(host, timestamp), samples>
-        with {samples} a dataframe of tuple <measurement, value>
-        """
-        raise NotImplementedError
+        q = flux.FluxQueryFrom(self.bucket)
+        q.range(start=start, stop=stop)
+        q.filter('(r) => r._measurement =~ /host:.*/')
+        q.aggregateWindow(every=self.windowsize, fn='mean')
+        q.drop(columns=['_start', '_stop', 'ifid'])
+        q.group(columns=["_time", "host"])
+        return q
 
     def category_map(self, qres_row):
-        """Returns the category of a device given a sample
-        from a flux query result. Devices with {None} category are ignored
-        """
-        raise NotImplementedError
+        hostname = qres_row['host']
+        if hostname in CICIDS2017_IPV4_NETMAP:
+            return CICIDS2017_IPV4_NETMAP[hostname]
+        if hostname in CICIDS2017_MAC_NETMAP:
+            return CICIDS2017_MAC_NETMAP[hostname]
+        return "unknown device class"
+
+    def check_jumps(self, new_samples, new_sample_raw, querydone):
+        if self.samples is None or new_samples is None:
+            return
+        last_timestamp = {}
+        one_second = np.timedelta64(1000000000, 'ns')
+
+        g = new_samples.groupby(['device_category', 'host'])
+        for (_, host), host_samples in g:
+            s_times = host_samples.index.get_level_values(2).sort_values(ascending=True)
+            s_times = s_times.sort_values(ascending=True)
+            last_timestamp[host] = s_times[0]
+            # intra-sample jump check ..... #
+            delta = np.diff(s_times.values)
+            blind_spot = [(*s_times[i:i+2], x_delta) for i, x_delta in enumerate(delta)]
+            blind_spot = filter(lambda x: x[2] > self.window_timedelta, blind_spot)
+            blind_spot = [(*x[:2], x[2] / one_second) for x in blind_spot]
+            blind_spot = pd.DataFrame(blind_spot, columns=["start", "stop", "seconds"])
+            if len(blind_spot) > 0:
+                raise RuntimeError(f"Intra blind spots for {host}: \n {blind_spot}")
+
+        # inter-sample check ..... #    
+        g = self.samples.groupby(['device_category', 'host'])
+        for (_, host), host_samples in g:
+            if host not in last_timestamp:
+                continue
+            old_s_times = host_samples.index.get_level_values(2).sort_values(ascending=True)
+            old_s_times = old_s_times.sort_values(ascending=True)
+            last_old_ts = old_s_times[-1]
+            if (last_old_ts - last_timestamp[host]).to_numpy() > self.window_timedelta:
+                raise RuntimeError(f"Inter-poll blind spot for host: {host}")
 
 
 # ----- ----- CICIDS2017 ----- ----- #
@@ -107,60 +160,6 @@ CICIDS2017_MAC_NETMAP = {
 }
 
 
-class ntop_Generator(FluxDataGenerator):
-    def __init__(self, bucket, windowsize, *args, **kwargs):
-        super(ntop_Generator, self).__init__(*args, **kwargs)
-        self.bucket = bucket
-        self.windowsize = windowsize
-
-    def query(self, start, stop=None):
-        q = flux.FluxQueryFrom(self.bucket)
-        q.range(start=start, stop=stop)
-        q.filter('(r) => r._measurement =~ /host:.*/')
-        q.aggregateWindow(every=self.windowsize, fn='mean')
-        q.drop(columns=['_start', '_stop', 'ifid'])
-        q.group(columns=["_time", "host"])
-        return q
-
-    def poll(self, **kwargs):
-        wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', self.windowsize).groups() 
-
-        last_timestamp, new_samples = super().poll(**kwargs)
-        # Showing blind spots
-        g = new_samples.groupby(['host', '_measurement', '_field'])
-        for name, group in g:
-            host = name[0]
-            measurement = '->'.join(name[1:])
-            times = group['_time'].sort_values(ascending=True)
-            
-            delta = np.diff(times.values)
-            blind_spot = [(*times[i:i+2], x_delta) for i, x_delta in enumerate(delta)]
-            blind_spot = filter(lambda x: x[2] > np.timedelta64(wndsize_val, wndsize_unit), blind_spot)
-            one_second = np.timedelta64(1000000000, 'ns')
-            blind_spot = [(*x[:2], x[2] / one_second) for x in blind_spot]
-            blind_spot = pd.DataFrame(blind_spot, columns=["start", "stop", "seconds"])
-            
-            if len(blind_spot) > 0:
-                logging.warning(f"Blind spots for {host}: {measurement}\n {blind_spot}")
-        return last_timestamp
-
-    def to_pandas(self):
-        self.samples['_key'] = self.samples['_measurement'].str.replace('host:', '') + ':' + self.samples['_field']
-        groups =  ['device_category', 'host', '_time', '_key']
-        df = self.samples.groupby(groups)['_value'].sum(min_count=1).unstack('_key')
-        # Cleaning the dataset
-        df_clean = df.fillna({"score:score": 0})
-        return df_clean.dropna()
-
-    def category_map(self, qres_row):
-        hostname = qres_row['host']
-        if hostname in CICIDS2017_IPV4_NETMAP:
-            return CICIDS2017_IPV4_NETMAP[hostname]
-        if hostname in CICIDS2017_MAC_NETMAP:
-            return CICIDS2017_MAC_NETMAP[hostname]
-        return "unknown device class"
-
-
 # ----- ----- CLI ----- ----- #
 # ----- ----- --- ----- ----- #
 if __name__ == '__main__':
@@ -180,13 +179,13 @@ if __name__ == '__main__':
     
     fclient = flux.FluxClient(host='127.0.0.1', port=args.port); 
     start = pd.Timestamp.utcnow() - pd.DateOffset(minutes=args.every)
-    cicids2017 = ntop_Generator(args.bucket, '30s', fclient, start)
+    cicids2017 = FluxDataGenerator(args.bucket, '15s', fclient, start)
 
     while True:
         try:
-            cicids2017.poll()
+            cicids2017.poll(stop=pd.Timestamp.utcnow())
             df = cicids2017.to_pandas()
-            df.to_pickle(args.output)
+            # df.to_pickle(args.output)
             print(f'Polled at: {datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}')
             time.sleep(60 * args.every)
         except KeyboardInterrupt:
