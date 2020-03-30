@@ -33,6 +33,7 @@ class FluxDataGenerator():
         if not start:
             start = self.last_timestamp
         q = self.query(start, stop)
+        self.last_timestamp = pd.Timestamp.utcnow()
         new_samples = self.fluxclient(q, grouby=False).dframe
         if new_samples is None:
             return None
@@ -42,16 +43,8 @@ class FluxDataGenerator():
         groups =  ['device_category', 'host', '_time', '_key']
         new_samples = new_samples.groupby(groups)['_value'].sum(min_count=1).unstack('_key')
         new_samples = new_samples.fillna({"score:score": 0})
-
-        self.check_jumps(new_samples.dropna(), new_samples, q)
-        
         new_samples = new_samples.dropna() 
-
         self.samples = pd.concat([self.samples, new_samples])
-
-        # ----- POSSIBLE BUG ----- #
-        self.last_timestamp = pd.Timestamp.utcnow()
-        # ----- POSSIBLE BUG ----- #
 
         return self.last_timestamp, new_samples
 
@@ -185,7 +178,6 @@ if __name__ == '__main__':
         try:
             cicids2017.poll(stop=pd.Timestamp.utcnow())
             df = cicids2017.to_pandas()
-            # df.to_pickle(args.output)
             print(f'Polled at: {datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}')
             time.sleep(60 * args.every)
         except KeyboardInterrupt:
