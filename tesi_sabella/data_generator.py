@@ -210,10 +210,9 @@ if __name__ == '__main__':
 
     while True:
         try:
-            cicids2017.pull(stop=pd.Timestamp.utcnow())
+            cicids2017.pull()
             df = cicids2017.to_pandas()
             print(f'Polled at: {datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}')
-            import pdb; pdb.set_trace() 
             time.sleep(60 * args.every)
         except KeyboardInterrupt:
             print('Closing capture')
