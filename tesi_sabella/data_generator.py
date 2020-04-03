@@ -84,13 +84,14 @@ class FluxDataGenerator():
             self.last_timestamp = utcnow
             return None
 
-        # Transforming existing ndpi flows to columns ..... #
+        # Transforming existing ndpi flows to measurements ..... #
         host_ndpi_flows = new_samples.loc[new_samples["_measurement"]=="host:ndpi_flows"]
         new_samples.loc[host_ndpi_flows.index, "_field"] += ("__" + host_ndpi_flows["protocol"])
-        # Transforming existing ndpi bytes to columns ..... #
+        # TODO: merge category and handle multiple index value (compute mean) at line 101 (pivot_table)
+        # Transforming existing ndpi bytes to measurements ..... #
         host_ndpi_bytes = new_samples.loc[new_samples["_measurement"]=="host:ndpi"]
         new_samples.loc[host_ndpi_bytes.index, "_field"] += ("__" + host_ndpi_bytes["protocol"])
-        # Transforming existing l4-proto to columns ..... #
+        # Transforming existing l4-proto to measurements ..... #
         host_l4protos = new_samples.loc[new_samples["_measurement"]=="host:l4protos"]
         new_samples.loc[host_l4protos.index, "_field"] += ("__" + host_l4protos["l4proto"])
         # Device category ..... #

@@ -1,55 +1,4 @@
-SUPPORTED_NDPI = set([
-    "ftp", "pop", "smtp", "imap", 
-    "dns", "ipp", "http", "mdns", 
-    "ntp", "netbios", "nfs", "ssdp", 
-    "bgp", "snmp", "xdmcp", "smb", 
-    "syslog", "dhcp", "postgresql", "mysql", 
-    "tds", "directdownloadlink", "i23v5", "applejuice", 
-    "directconnect", "socrates", "vmware", "pando", 
-    "filetopia", "imesh", "kontiki", "openft", 
-    "kazaa/fasttrack", "gnutella", "edonkey", "bittorrent", 
-    "off", "avi", "flash", "ogg", 
-    "mpeg", "quicktime", "realmedia", "windowsmedia", 
-    "mms", "xbox", "qq", "move", 
-    "rtsp", "feidian", "icecast", "pplive", 
-    "ppstream", "zattoo", "shoutcast", "sopcast", 
-    "tvants", "tvuplayer", "veohtv", "qqlive", 
-    "thunder/webthunder", "soulseek", "irc", "jabber", 
-    "msn", "oscar", "yahoo", "battlefield", 
-    "quake", "vrrp", "steam", "halflife2", 
-    "world of warcraft", "telnet", "stun", "ipsec", 
-    "gre", "icmp", "igmp", "egp", 
-    "sctp", "ospf", "ip in ip", "rtp", 
-    "rdp", "vnc", "pcanywhere", "ssl", 
-    "ssh", "usenet", "mgcp", "iax", 
-    "tftp", "afp", "stealthnet", "aimini", 
-    "sip", "truphone", "icmpv6", "dhcpv6", 
-    "armagetron", "crossfire", "dofus", "fiesta", 
-    "florensia", "guildwars", "http application activesync", "kerberos", 
-    "ldap", "maplestory", "mssql", "pptp", 
-    "warcraft3", "world of kung fu", "meebo", "facebook", 
-    "twitter", "dropbox", "gmail", "google maps", 
-    "youtube", "skype", "google", "dce rpc", 
-    "netflow_ipfix", "sflow", "http connect (ssl over http)", "http proxy", 
-    "netflix", "citrix", "citrixonline/gotomeeting", "apple (imessage, facetime‚Ä¶)", 
-    "webex", "whatsapp", "apple icloud", "viber", 
-    "apple itunes", "radius", "windowsupdate", "teamviewer", 
-    "tuenti", "lotusnotes", "sap", "gtp", 
-    "upnp", "llmnr", "remotescan", "spotify", 
-    "h323", "openvpn", "noe", "ciscovpn", 
-    "teamspeak", "tor", "ciscoskinny", "rtcp", 
-    "rsync", "oracle", "corba", "ubuntuone", 
-    "cnn", "wikipedia", "whois-das", "collectd", 
-    "redis", "zeromq", "megaco", "quic", 
-    "whatsapp voice", "stracraft", "teredo", "snapchat", 
-    "simet", "opensignal", "99taxi", "globotv", 
-    "deezer", "instagram", "microsoft cloud services", "twitch", 
-    "kakaotalk voice and chat", "hotspotshield vpn", "1kxun", "hangout", 
-    "mqtt", "rx", "coap", "git", 
-    "diameter", "apache jserv protocol"])
-NDPI_FLOWS_COMPLETE = set([f"ndpi_flows:num_flows__{x}" for x in SUPPORTED_NDPI])
-NDPI_BYTES_RCVD_COMPLETE = set([f"ndpi:bytes_rcvd__{x}" for x in SUPPORTED_NDPI])
-NDPI_BYTES_SENT_COMPLETE = set([f"ndpi:bytes_sent__{x}" for x in SUPPORTED_NDPI])
+import numpy as np
 
 SUPPORTED_L4 = set([
     "ip", "icmp", "igmp", "ggp",
@@ -133,3 +82,88 @@ FEATURE_SET = set([
     "udp_sent_unicast:bytes_sent_unicast",
     "unreachable_flows:flows_as_client",
     "unreachable_flows:flows_as_server"])
+
+NDPI_CATEGORIES = { 
+    "gaming": [
+        "xbox", "battlefield", "quake",
+        "steam", "halflife2", "world of warcraft",
+        "armagetron", "crossfire", "fiesta",
+        "florensia", "guildwars","maplestory", "warcraft3",
+        "world of kung fu", "stracraft", "dofus"],
+    "sysadmin": [
+        "ftp", "ntp", "telnet", 
+        "ssh", "rsync", "git", "tftp"],
+    "mail_service": ["pop", "smtp", "imap", "gmail"],
+    "file_sharing": ["directdownloadlink", "aimini", "applejuice"],
+    "p2p_file_sharing": [
+        "stealthnet", "filetopia", "kazaa/fasttrack",
+        "gnutella", "edonkey", "bittorrent",
+        "soulseek", "pando", "kontiki",
+        "imesh", "openft", "directconnect",
+        "feidian", "fiesta" ],
+    "cloud storage": [
+        "dropbox", "apple icloud", "microsoft cloud services", 
+        "ubuntuone"],
+    "search-engine": ["google", "yahoo"],
+    "database": ["postgresql", "mysql", "mssql", "redis", "tds"],
+    "social": ["facebook", "twitter", "snapchat", "instagram"],
+    "update": ["windowsupdate"],
+    "routing": [
+        "bgp", "dhcp", "vrrp",
+        "egp", "ospf", "megaco", "dhcpv6"],
+    "video-media": ["youtube", "netflix", "twitch", "1kxun"],
+    "chat": [
+        "qq", "whatsapp", "viber", 
+        "hangout", "kakaotalk voice and chat", "meebo"],
+    "tor": ["tor" ],
+    "instant-message-protocol": [ "oscar", "irc"],
+    "message-broker": ["zeromq", "mqtt"],
+    "vpn": ["openvpn", "ciscovpn", "hotspotshield vpn", "pptp"],
+    "music-service": ["spotify", "apple itunes", "deezer"],
+    "maps": ["google maps"],
+    "online_encyclopedia": ["wikipedia"],
+    "video-chat": [
+        "skype", "citrixonline/gotomeeting", 
+        "apple", "webex", "jabber"],
+    "ridesharing": ["99taxi"],
+    "monitoring": ["netflow_ipfix", "sflow", "collectd", "snmp", "syslog", "icmpv6", "icmp"],
+    "audio_file": ["ogg", "mpeg"],
+    "video_file": ["avi", "quicktime", "realmedia"],
+    "dns": ["dns", "mdns", "llmnr"],
+    "printing_scanners": ["ipp", "remotescan"],
+    "device discovery": [ "ssdp", "upnp"],
+    "remote-access": ["xdmcp", "rdp",  "vnc", "teamviewer", "pcanywhere"],
+    "iptv": ["zattoo", "veohtv", "globotv"],
+    "p2p-iptv": ["sopcast", "tvants", "tvuplayer"],
+    "p2p-streaming": ["ppstream", "pplive", "qqlive"],
+    "streaming": ["shoutcast", "icecast", "rtsp"],
+    "aaa-protocol": ["radius", "diameter"],
+    "l4-encr": ["ssl"],
+    "http": ["http"],
+    "network_file_system": ["nfs", "smb", "afp", "ldap", "http application activesync"],
+    "voip": ["mgcp", "iax", "truphone", "teamspeak", "whatsapp voice"],
+    "real-time-media-protocol": [ "h323", "rtcp", "rtp", "sip", ],
+    "other-l4": ["quic", "sctp"],
+    "rpc": ["rx", "dce rpc"],
+    "osi-l5": ["netbios"],
+    "ipsec": ["ipsec"],
+    "tunneling": ["ip in ip", "gtp", "gre"],
+    "other": [
+        "teredo", "stun", "vmware",
+        "citrix", "coap", "tuenti",
+        "usenet", "kerberos", "simet",
+        "opensignal", "apache jserv protocol", "i23v5", "socrates",
+        "off", "flash", "windowsmedia",
+        "thunder/webthunder", "msn", "igmp",
+        "http connect (ssl over http)", 
+        "http proxy", "lotusnotes",
+        "sap" , "noe",
+        "ciscoskinny", "oracle", "corba",
+        "mms", "move", "cnn", "whois-das"]
+}
+NDPI_VALUE2CAT = {v: key  for (key, values) in ntopng.NDPI_CAT.items() for v in values}
+SUPPORTED_NDPI = np.sum(list(NDPI_CAT.values()), initial=[])
+NDPI_FLOWS_COMPLETE = set([f"ndpi_flows:num_flows__{x}" for x in NDPI_CATEGORIES.keys()])
+NDPI_BYTES_RCVD_COMPLETE = set([f"ndpi:bytes_rcvd__{x}" for x in NDPI_CATEGORIES.keys()])
+NDPI_BYTES_SENT_COMPLETE = set([f"ndpi:bytes_sent__{x}" for x in NDPI_CATEGORIES.keys()])
+
