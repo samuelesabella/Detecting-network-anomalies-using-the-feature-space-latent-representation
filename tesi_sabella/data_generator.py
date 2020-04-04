@@ -67,13 +67,13 @@ class FluxDataGenerator():
     def to_pandas(self):
         if self.samples is None:
             raise ValueError('No samples available')
+        samples_df = self.samples.copy(deep=True)
         
-        no_diff_cols = ["active_flows:flows_as_client", "active_flows:flows_as_server"]
-        backup_cols = self.samples[no_diff_cols]
-        delta_samples = self.samples.drop(no_diff_cols, axis=1).groupby(level=1).diff()
-        delta_samples[no_diff_cols] = backup_cols
-        delta_samples = delta_samples.groupby(level=1).apply(lambda group: group.iloc[1:])
-        return delta_samples
+        avoid_diff_cols = ["active_flows:flows_as_client", "active_flows:flows_as_server"]
+        to_diff_cols = samples_df.columns.difference(avoid_diff_cols)
+        samples_df[to_diff_cols] = samples_df[to_diff_cols].groupby(level=1).diff()
+        samples_df = samples_df.groupby(level=1, group_keys=False).apply(lambda group: group.iloc[1:])
+        return samples_df
 
     def pull(self, start=None, stop=None):
         if not start:
