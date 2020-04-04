@@ -102,7 +102,7 @@ class FluxDataGenerator():
         new_samples['_key'] = new_samples['_measurement'].str.replace('host:', '') + ':' + new_samples['_field']
         new_samples = new_samples.pivot_table(index=["device_category", "host", "_time"], 
                                               columns="_key", values="_value", aggfunc="mean")
-        new_samples = new_samples[ntopng_c.FEATURE_SET]
+        new_samples.columns = new_samples.columns.rename(None)
         # Drop cutted samples. E.g. range(start=13:46:58, stop:13:49:00) have almost for sure NaN in the first 2 seconds) 
         # Thus we drop NaN values from bytes_rcvd which should never be NaN
         new_samples.dropna(subset=["traffic:bytes_rcvd"])
@@ -118,6 +118,8 @@ class FluxDataGenerator():
         missing_columns += ntopng_c.L4_BYTES_SENT_COMPLETE - available_columns 
         new_samples = new_samples.reindex(columns=new_samples.columns.tolist() + missing_columns, fill_value=0)
         # Updating ..... #
+        # Checking to have only valid columns
+        new_samples = new_samples[ntopng_c.FEATURES_COMPLETE]
         self.samples = pd.concat([self.samples, new_samples])
         cat_host_sample = new_samples.index[0][:2]
         samples_times = new_samples.loc[cat_host_sample].index 
