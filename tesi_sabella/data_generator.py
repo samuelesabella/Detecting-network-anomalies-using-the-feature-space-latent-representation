@@ -12,46 +12,6 @@ import importlib
 importlib.reload(flux)
 
 
-
-# ----- ----- CICIDS2017 ----- ----- #
-# ----- ----- ---------- ----- ----- #
-CICIDS2017_IPV4_NETMAP = {
-    "192.168.10.3": "server",
-    "192.168.10.50": "server",
-    "192.168.10.51": "server",
-    "205.174.165.68": "server",
-    "205.174.165.66": "server", 
-
-    "192.168.10.19": "pc",
-    "192.168.10.17": "pc",
-    "192.168.10.16": "pc",
-    "192.168.10.12": "pc",
-    "192.168.10.9": "pc",
-    "192.168.10.5": "pc",
-    "192.168.10.8": "pc",
-    "192.168.10.14": "pc",
-    "192.168.10.15": "pc",
-    "192.168.10.25": "pc",
-}
-
-CICIDS2017_MAC_NETMAP = {
-    "18:66:DA:9B:E3:7D": "server",
-    "00:19:B9:0A:69:F1": "server",
-    "B8:AC:6F:36:0B:A8": "server",
-
-    "00:23:AE:9B:AD:B3": "pc",
-    "00:23:AE:9B:95:67": "pc",
-    "00:23:AE:9B:8A:BF": "pc",
-    "B8:AC:6F:36:04:E3": "pc",
-    "B8:AC:6F:1D:1F:6C": "pc",
-    "B8:AC:6F:36:0A:8B": "pc",
-    "B8:AC:6F:36:08:F5": "pc",
-    "B8:AC:6F:36:07:EE": "pc",
-    "00:1E:4F:D4:CA:28": "pc",
-    "00:25:00:A8:C4:60": "pc",
-}
-
-
 # ----- ----- HOST DATA GENERATOR ----- ----- #
 # ----- ----- ------------------- ----- ----- #
 class FluxDataGenerator():
@@ -154,11 +114,6 @@ class FluxDataGenerator():
         return q
 
     def category_map(self, qres_row):
-        hostname = qres_row['host']
-        if hostname in CICIDS2017_IPV4_NETMAP:
-            return CICIDS2017_IPV4_NETMAP[hostname]
-        if hostname in CICIDS2017_MAC_NETMAP:
-            return CICIDS2017_MAC_NETMAP[hostname]
         return "unknown device class"
 
     def check_jumps(self, new_samples):
@@ -193,6 +148,38 @@ class FluxDataGenerator():
                 raise RuntimeError(f"Inter-poll blind spot for host: {host}")
 
 
+# ----- ----- CICIDS2017 ----- ----- #
+# ----- ----- ---------- ----- ----- #
+CICIDS2017_IPV4_NETMAP = {
+    "192.168.10.3": "server",
+    "192.168.10.50": "server",
+    "192.168.10.51": "server",
+    "205.174.165.68": "server",
+    "205.174.165.66": "server", 
+
+    "192.168.10.19": "pc",
+    "192.168.10.17": "pc",
+    "192.168.10.16": "pc",
+    "192.168.10.12": "pc",
+    "192.168.10.9": "pc",
+    "192.168.10.5": "pc",
+    "192.168.10.8": "pc",
+    "192.168.10.14": "pc",
+    "192.168.10.15": "pc",
+    "192.168.10.25": "pc",
+}
+
+
+class CICIDS2017(FluxDataGenerator):
+    def category_map(self, qres_row):
+        hostname = qres_row['host']
+        if hostname in CICIDS2017_IPV4_NETMAP:
+            return CICIDS2017_IPV4_NETMAP[hostname]
+        if hostname in CICIDS2017_MAC_NETMAP:
+            return CICIDS2017_MAC_NETMAP[hostname]
+        return "unknown device class"
+
+
 # ----- ----- CLI ----- ----- #
 # ----- ----- --- ----- ----- #
 if __name__ == '__main__':
@@ -212,7 +199,7 @@ if __name__ == '__main__':
     
     fclient = flux.FluxClient(host='127.0.0.1', port=args.port); 
     start = pd.Timestamp.utcnow() - pd.DateOffset(minutes=args.every)
-    cicids2017 = FluxDataGenerator(args.bucket, '15s', fclient, start)
+    cicids2017 = CICIDS2017(args.bucket, '15s', fclient, start)
 
     while True:
         try:
