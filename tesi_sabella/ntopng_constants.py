@@ -1,4 +1,5 @@
 import numpy as np
+from collections import defaultdict
 
 SUPPORTED_L4 = set([
     "ip", "icmp", "igmp", "ggp",
@@ -53,7 +54,7 @@ FEATURE_SET = set([
     "echo_packets:packets_sent",
     "echo_reply_packets:packets_rcvd",
     "echo_reply_packets:packets_sent",
-    #"engaged_alerts:alerts",
+    #"engaged_alerts:alerts", (not used)
     "host_unreachable_flows:flows_as_client",
     "host_unreachable_flows:flows_as_server",
     #"l4protos:bytes_rcvd__x", with x an l4 protocol
@@ -70,8 +71,8 @@ FEATURE_SET = set([
     "tcp_tx_stats:lost_packets",
     "tcp_tx_stats:out_of_order_packets",
     "tcp_tx_stats:retransmission_packets",
-    #"total_alerts:alerts",
-    #"total_flow_alerts:alerts",
+    #"total_alerts:alerts", (not used)
+    #"total_flow_alerts:alerts", (not used)
     "total_flows:flows_as_client",
     "total_flows:flows_as_server",
     "traffic:bytes_rcvd",
@@ -161,9 +162,8 @@ NDPI_CATEGORIES = {
         "ciscoskinny", "oracle", "corba",
         "mms", "move", "cnn", "whois-das"]
 }
-NDPI_VALUE2CAT = {v: key  for (key, values) in ntopng.NDPI_CAT.items() for v in values}
-SUPPORTED_NDPI = np.sum(list(NDPI_CAT.values()), initial=[])
-NDPI_FLOWS_COMPLETE = set([f"ndpi_flows:num_flows__{x}" for x in NDPI_CATEGORIES.keys()])
-NDPI_BYTES_RCVD_COMPLETE = set([f"ndpi:bytes_rcvd__{x}" for x in NDPI_CATEGORIES.keys()])
-NDPI_BYTES_SENT_COMPLETE = set([f"ndpi:bytes_sent__{x}" for x in NDPI_CATEGORIES.keys()])
-
+NDPI_VALUE2CAT = defaultdict(lambda: "unknown", {v: key  for (key, values) in NDPI_CATEGORIES.items() for v in values})
+SUPPORTED_NDPI = np.sum(list(NDPI_CATEGORIES.values()), initial=[])
+NDPI_FLOWS_COMPLETE = set({f"ndpi_flows:num_flows__{x}" for x in NDPI_CATEGORIES.keys()})
+NDPI_BYTES_RCVD_COMPLETE = set({f"ndpi:bytes_rcvd__{x}" for x in NDPI_CATEGORIES.keys()})
+NDPI_BYTES_SENT_COMPLETE = set({f"ndpi:bytes_sent__{x}" for x in NDPI_CATEGORIES.keys()})

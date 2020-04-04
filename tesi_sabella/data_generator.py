@@ -4,12 +4,13 @@ import numpy as np
 from datetime import datetime
 import time
 import pandas as pd
-import pyfluxc.pyfluxc.pyfluxc as flux 
+import pyfluxc.pyfluxc as flux
 import pathlib 
-import ntopng_constants as pj_costant
+import ntopng_constants as ntopng_c
 
 import importlib
 importlib.reload(flux)
+
 
 
 # ----- ----- CICIDS2017 ----- ----- #
@@ -86,11 +87,12 @@ class FluxDataGenerator():
 
         # Transforming existing ndpi flows to measurements ..... #
         host_ndpi_flows = new_samples.loc[new_samples["_measurement"]=="host:ndpi_flows"]
-        new_samples.loc[host_ndpi_flows.index, "_field"] += ("__" + host_ndpi_flows["protocol"])
-        # TODO: merge category and handle multiple index value (compute mean) at line 101 (pivot_table)
+        host_ndpi_flows_cat = host_ndpi_flows["protocol"].map(ntopng_c.NDPI_VALUE2CAT)
+        new_samples.loc[host_ndpi_flows.index, "_field"] += ("__" + host_ndpi_flows_cat)
         # Transforming existing ndpi bytes to measurements ..... #
         host_ndpi_bytes = new_samples.loc[new_samples["_measurement"]=="host:ndpi"]
-        new_samples.loc[host_ndpi_bytes.index, "_field"] += ("__" + host_ndpi_bytes["protocol"])
+        host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].map(ntopng_c.NDPI_VALUE2CAT)
+        new_samples.loc[host_ndpi_bytes.index, "_field"] += ("__" + host_ndpi_bytes_cat)
         # Transforming existing l4-proto to measurements ..... #
         host_l4protos = new_samples.loc[new_samples["_measurement"]=="host:l4protos"]
         new_samples.loc[host_l4protos.index, "_field"] += ("__" + host_l4protos["l4proto"])
@@ -98,8 +100,9 @@ class FluxDataGenerator():
         new_samples['device_category'] = new_samples.apply(self.category_map, axis=1)
         # Building dframe ..... # 
         new_samples['_key'] = new_samples['_measurement'].str.replace('host:', '') + ':' + new_samples['_field']
-        new_samples = new_samples.pivot_table(index=["device_category", "host", "_time"], columns="_key", values="_value")
-        new_samples = new_samples[pj_costant.FEATURE_SET]
+        new_samples = new_samples.pivot_table(index=["device_category", "host", "_time"], 
+                                              columns="_key", values="_value", aggfunc="mean")
+        new_samples = new_samples[ntopng_c.FEATURE_SET]
         # Drop cutted samples. E.g. range(start=13:46:58, stop:13:49:00) have almost for sure NaN in the first 2 seconds) 
         # Thus we drop NaN values from bytes_rcvd which should never be NaN
         new_samples.dropna(subset=["traffic:bytes_rcvd"])
@@ -108,11 +111,11 @@ class FluxDataGenerator():
         # Adding missing columns ..... #
         missing_columns = []
         available_columns = set(new_samples.columns)
-        missing_columns += pj_costant.NDPI_FLOWS_COMPLETE - available_columns 
-        missing_columns += pj_costant.NDPI_BYTES_RCVD_COMPLETE - available_columns 
-        missing_columns += pj_costant.NDPI_BYTES_SENT_COMPLETE - available_columns 
-        missing_columns += pj_costant.L4_BYTES_RCVD_COMPLETE - available_columns 
-        missing_columns += pj_costant.L4_BYTES_SENT_COMPLETE - available_columns 
+        missing_columns += ntopng_c.NDPI_FLOWS_COMPLETE - available_columns 
+        missing_columns += ntopng_c.NDPI_BYTES_RCVD_COMPLETE - available_columns 
+        missing_columns += ntopng_c.NDPI_BYTES_SENT_COMPLETE - available_columns 
+        missing_columns += ntopng_c.L4_BYTES_RCVD_COMPLETE - available_columns 
+        missing_columns += ntopng_c.L4_BYTES_SENT_COMPLETE - available_columns 
         new_samples = new_samples.reindex(columns=new_samples.columns.tolist() + missing_columns, fill_value=0)
         # Updating ..... #
         self.samples = pd.concat([self.samples, new_samples])
