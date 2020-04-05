@@ -31,7 +31,7 @@ class FluxDataGenerator():
         
         avoid_diff_cols = ["active_flows:flows_as_client", "active_flows:flows_as_server"]
         to_diff_cols = samples_df.columns.difference(avoid_diff_cols)
-        samples_df[to_diff_cols] = samples_df[to_diff_cols].groupby(level=1).diff()
+        samples_df[to_diff_cols] = samples_df[to_diff_cols].diff()
         samples_df = samples_df.groupby(level=1, group_keys=False).apply(lambda group: group.iloc[1:])
         return samples_df
 
@@ -175,8 +175,6 @@ class CICIDS2017(FluxDataGenerator):
         hostname = qres_row['host']
         if hostname in CICIDS2017_IPV4_NETMAP:
             return CICIDS2017_IPV4_NETMAP[hostname]
-        if hostname in CICIDS2017_MAC_NETMAP:
-            return CICIDS2017_MAC_NETMAP[hostname]
         return "unknown device class"
 
 

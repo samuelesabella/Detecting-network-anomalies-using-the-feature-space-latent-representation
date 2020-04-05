@@ -161,6 +161,28 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
 
         pd.testing.assert_frame_equal(dset[target.columns], target, check_like=True)
 
+    def test_multi_host_to_pandas(self):
+        ii_host = mock_qresult.copy(deep=True)
+        ii_host["host"] = "192.168.50.0"
+        ii_host["_value"] += 15.
+        mock_both_hosts = pd.concat([mock_qresult, ii_host]).reset_index()
+        type(self.client.return_value).dframe = mock_both_hosts.copy(deep=True)
+        _, sample = self.cicids2017.pull()
+        dset = self.cicids2017.to_pandas()
+
+        target = pd.DataFrame({
+            ("unknown device class", "192.168.10.1", "2020-04-03 12:25:30"): [1., 1.0, 11.5],
+            ("unknown device class", "192.168.10.1", "2020-04-03 12:25:45"): [1., 1.1, 12.5],  
+            ("unknown device class", "192.168.10.1", "2020-04-03 12:26:00"): [1., 1.2, 13.5],
+            ("unknown device class", "192.168.50.0", "2020-04-03 12:25:30"): [1., 1.0, 26.5],
+            ("unknown device class", "192.168.50.0", "2020-04-03 12:25:45"): [1., 1.1, 27.5],  
+            ("unknown device class", "192.168.50.0", "2020-04-03 12:26:00"): [1., 1.2, 28.5],
+        }).T
+        target.columns = ["traffic:bytes_rcvd", "ndpi_flows:num_flows__p2p_file_sharing", "active_flows:flows_as_server"]
+        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format='%Y-%m-%d %H:%M:%S')) for (dc, h, d) in target.index])
+        target.index = target.index.rename(['device_category', 'host', '_time'])
+
+        pd.testing.assert_frame_equal(dset[target.columns], target, check_like=True)
 
 if __name__ == '__main__':
     unittest.main()
