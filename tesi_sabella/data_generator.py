@@ -24,11 +24,13 @@ class FluxDataGenerator():
         wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', self.windowsize).groups() 
         self.window_timedelta = np.timedelta64(wndsize_val, wndsize_unit)
 
-    def to_pandas(self):
+    def to_pandas(self, diff=False):
         if self.samples is None:
             raise ValueError('No samples available')
         samples_df = self.samples.copy(deep=True)
-        
+        if not diff:
+            return samples_df
+
         avoid_diff_cols = ["active_flows:flows_as_client", "active_flows:flows_as_server"]
         to_diff_cols = samples_df.columns.difference(avoid_diff_cols)
         samples_df[to_diff_cols] = samples_df[to_diff_cols].diff()
@@ -43,15 +45,15 @@ class FluxDataGenerator():
         new_samples = self.fluxclient(q, grouby=False).dframe
         if new_samples is None:
             self.last_timestamp = utcnow
-            return None
+            return utcnow, None 
 
         # Transforming existing ndpi flows to measurements ..... #
         host_ndpi_flows = new_samples.loc[new_samples["_measurement"]=="host:ndpi_flows"]
-        host_ndpi_flows_cat = host_ndpi_flows["protocol"].map(ntopng_c.NDPI_VALUE2CAT)
+        host_ndpi_flows_cat = host_ndpi_flows["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
         new_samples.loc[host_ndpi_flows.index, "_field"] += ("__" + host_ndpi_flows_cat)
         # Transforming existing ndpi bytes to measurements ..... #
         host_ndpi_bytes = new_samples.loc[new_samples["_measurement"]=="host:ndpi"]
-        host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].map(ntopng_c.NDPI_VALUE2CAT)
+        host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
         new_samples.loc[host_ndpi_bytes.index, "_field"] += ("__" + host_ndpi_bytes_cat)
         # Transforming existing l4-proto to measurements ..... #
         host_l4protos = new_samples.loc[new_samples["_measurement"]=="host:l4protos"]

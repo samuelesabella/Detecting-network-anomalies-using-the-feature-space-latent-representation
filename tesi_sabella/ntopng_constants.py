@@ -1,4 +1,5 @@
 import numpy as np
+import logging
 import copy
 from collections import defaultdict
 
@@ -51,11 +52,13 @@ NDPI_CATEGORIES = {
         "steam", "halflife2", "world of warcraft",
         "armagetron", "crossfire", "fiesta",
         "florensia", "guildwars","maplestory", "warcraft3",
-        "world of kung fu", "stracraft", "dofus"],
+        "world of kung fu", "stracraft", "dofus",
+        "starcraft"],
     "sysadmin": [
         "ftp", "ntp", "telnet", 
-        "ssh", "rsync", "git", "tftp"],
-    "mail_service": ["pop", "smtp", "imap", "gmail"],
+        "ssh", "rsync", "git", 
+        "tftp", "ftp_control", "ftp_data"],
+    "mail_service": ["pop", "smtp", "imap", "gmail", "smtps", "pop3"],
     "file_sharing": ["directdownloadlink", "aimini", "applejuice"],
     "p2p_file_sharing": [
         "stealthnet", "filetopia", "kazaa/fasttrack",
@@ -65,65 +68,101 @@ NDPI_CATEGORIES = {
         "feidian", "fiesta" ],
     "cloud storage": [
         "dropbox", "apple icloud", "microsoft cloud services", 
-        "ubuntuone"],
+        "ubuntuone", "ms_onedrive", "googledrive"],
     "search-engine": ["google", "yahoo"],
-    "database": ["postgresql", "mysql", "mssql", "redis", "tds"],
-    "social": ["facebook", "twitter", "snapchat", "instagram"],
+    "database": ["postgresql", "mysql", "mssql", "redis", "tds", "mssql-tds"],
+    "e-commerce": ["amazon", "ebay"], 
+    "social": [
+        "facebook", "twitter", "snapchat", 
+        "instagram", "linkedin", "github",
+        "sina(weibo)", "googleplus", "usenet"],
+    "document-editing": [ "office365", "googledocs" ],
     "update": ["windowsupdate"],
     "routing": [
-        "bgp", "dhcp", "vrrp",
+        "bgp", "dhcp", "vrrp", "igmp"
         "egp", "ospf", "megaco", "dhcpv6"],
     "video-media": ["youtube", "netflix", "twitch", "1kxun"],
     "chat": [
-        "qq", "whatsapp", "viber", 
-        "hangout", "kakaotalk voice and chat", "meebo"],
+        "qq", "whatsapp", "viber", "wechat", 
+        "hangout", "kakaotalk voice and chat", "meebo",
+        "kakaotalk", "googlehangoutduo"],
     "tor": ["tor" ],
     "instant-message-protocol": [ "oscar", "irc"],
     "message-broker": ["zeromq", "mqtt"],
     "vpn": ["openvpn", "ciscovpn", "hotspotshield vpn", "pptp"],
-    "music-service": ["spotify", "apple itunes", "deezer"],
-    "maps": ["google maps"],
+    "music-service": ["spotify", "appleitunes", "deezer", "soundcloud", "lastfm"],
+    "maps": ["googlemaps"],
     "online_encyclopedia": ["wikipedia"],
-    "video-chat": [
-        "skype", "citrixonline/gotomeeting", 
-        "apple", "webex", "jabber"],
+    "video-chat": [ 
+        "skype", "citrixonline/gotomeeting", "webex", 
+        "jabber", "zoom", "imo"],
+    "os-specific": [
+        "microsoft", "apple", "applestore"
+    ],
     "ridesharing": ["99taxi"],
-    "monitoring": ["netflow_ipfix", "sflow", "collectd", "snmp", "syslog", "icmpv6", "icmp"],
+    "monitoring": [
+        "netflow_ipfix", "sflow", "collectd", 
+        "snmp", "syslog", "icmpv6", "icmp", 
+        "ookla", "opensignal", "simet"],
     "audio_file": ["ogg", "mpeg"],
     "video_file": ["avi", "quicktime", "realmedia"],
     "dns": ["dns", "mdns", "llmnr"],
     "printing_scanners": ["ipp", "remotescan"],
-    "device discovery": [ "ssdp", "upnp"],
+    "device discovery": [ "ssdp", "upnp", "bjnp"],
     "remote-access": ["xdmcp", "rdp",  "vnc", "teamviewer", "pcanywhere"],
     "iptv": ["zattoo", "veohtv", "globotv"],
     "p2p-iptv": ["sopcast", "tvants", "tvuplayer"],
     "p2p-streaming": ["ppstream", "pplive", "qqlive"],
     "streaming": ["shoutcast", "icecast", "rtsp"],
-    "aaa-protocol": ["radius", "diameter"],
-    "l4-encr": ["ssl"],
+    "aaa-protocol": ["radius", "diameter", "kerberos"],
+    "l4-encr": ["ssl", "tls"],
     "http": ["http"],
-    "network_file_system": ["nfs", "smb", "afp", "ldap", "http application activesync"],
-    "voip": ["mgcp", "iax", "truphone", "teamspeak", "whatsapp voice"],
-    "real-time-media-protocol": [ "h323", "rtcp", "rtp", "sip", ],
+    "network_file_system": [
+        "nfs", "smbv23", "smbv1", 
+        "smb", "afp", "ldap", 
+        "http application activesync"],
+    "voip": ["mgcp", "iax", "truphone", "teamspeak", "whatsapp voice", "stun", "tuenti"],
+    "real-time-media-protocol": ["h323", "rtcp", "rtp", "sip"],
     "other-l4": ["quic", "sctp"],
-    "rpc": ["rx", "dce rpc"],
+    "rpc": ["rx", "dce_rpc"],
     "osi-l5": ["netbios"],
     "ipsec": ["ipsec"],
     "tunneling": ["ip in ip", "gtp", "gre"],
+    "android-specific": ["googleservices"], 
+    "iot": ["coap"],
+    "proxy": ["apache jserv protocol", "socks", "http_proxy", "ajp"],
     "other": [
-        "teredo", "stun", "vmware",
-        "citrix", "coap", "tuenti",
-        "usenet", "kerberos", "simet",
-        "opensignal", "apache jserv protocol", "i23v5", "socrates",
+        "teredo",  "vmware",
+        "citrix", "i23v5", "socrates",
         "off", "flash", "windowsmedia",
-        "thunder/webthunder", "msn", "igmp",
+        "thunder/webthunder", "msn", ,
         "http connect (ssl over http)", 
-        "http proxy", "lotusnotes",
-        "sap" , "noe",
+        "lotusnotes", "sap" , "noe",
         "ciscoskinny", "oracle", "corba",
-        "mms", "move", "cnn", "whois-das"]
+        "mms", "move", "cnn", "whois-das",
+        "cloudflare", "pastebin", "targus dataspeed",
+        "dnp3"]
 }
-NDPI_VALUE2CAT = defaultdict(lambda: "unknown", {v: key  for (key, values) in NDPI_CATEGORIES.items() for v in values})
+
+
+class key_dependent_dict(defaultdict):
+    """https://www.reddit.com/r/Python/comments/27crqg/making_defaultdict_create_defaults_that_are_a/
+    """
+    def __init__(self, f_of_x, basedict):
+        super().__init__(None, basedict) # base class doesn't get a factory
+        self.f_of_x = f_of_x # save f(x)
+
+    def __missing__(self, key): # called when a default needed
+        ret = self.f_of_x(key) # calculate default value
+        self[key] = ret # and install it in the dict
+        return ret
+
+
+def ndpi_value2cat(x):
+    logging.warning(f"unknown L7 protocol {x}")
+    return "unknown-ndpi"
+
+NDPI_VALUE2CAT = key_dependent_dict(ndpi_value2cat, {v: key  for (key, values) in NDPI_CATEGORIES.items() for v in values})
 SUPPORTED_NDPI = np.sum(list(NDPI_CATEGORIES.values()), initial=[])
 NDPI_FLOWS_COMPLETE = set({f"ndpi_flows:num_flows__{x}" for x in NDPI_CATEGORIES.keys()})
 NDPI_BYTES_RCVD_COMPLETE = set({f"ndpi:bytes_rcvd__{x}" for x in NDPI_CATEGORIES.keys()})
