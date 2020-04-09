@@ -37,6 +37,31 @@ class FluxDataGenerator():
         samples_df = samples_df.groupby(level=1, group_keys=False).apply(lambda group: group.iloc[1:])
         return samples_df
 
+    @staticmethod
+    def pre_processing(df, level="smart"):
+        df = df[ntopng_c.FEATURE_LEVELS[level]].copy(deep=True)
+
+        # dpi unit length normalization ..... #
+        ndpi_cols = [c for c in df.columns if "ndpi" in c]
+        ndpi_subcols = []
+        ndpi_subcols.append([c for c in ndpi_cols if "rcvd" in c])
+        ndpi_subcols.append([c for c in ndpi_cols if "sent" in c])
+        ndpi_subcols.append([c for c in ndpi_cols if "num_flows" in c])
+        ndpi_subcols = [x for x in ndpi_subcols if len(x) > 0]
+        
+        for ndpi_subc in ndpi_subcols:
+            ndpi = df[ndpi_subc]
+            ndpi_sum = ndpi.sum(axis=1)
+            df.loc[:, ndpi_subc] = ndpi.divide(ndpi_sum, axis=0)
+
+        # Min max scaling ..... #
+        other_cols = [c for c in df.columns if c not in ndpi_cols]
+        other_cols_min = df[other_cols].min()
+        other_cols_max = df[other_cols].max()
+        df.loc[:, other_cols] = (df.loc[:, other_cols] - other_cols_min) / (other_cols_max - other_cols_min)
+
+        return df
+
     def pull(self, start=None, stop=None):
         if not start:
             start = self.last_timestamp

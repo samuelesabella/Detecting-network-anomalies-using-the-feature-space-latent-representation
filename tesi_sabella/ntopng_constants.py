@@ -145,7 +145,8 @@ NDPI_CATEGORIES = {
         "ciscoskinny", "oracle", "corba",
         "mms", "move", "cnn", "whois-das",
         "cloudflare", "pastebin", "targus dataspeed",
-        "dnp3", "pops"]
+        "dnp3", "pops"],
+    "unknown": [ "unknown" ]
 }
 
 
@@ -164,7 +165,7 @@ class key_dependent_dict(defaultdict):
 
 def ndpi_value2cat(x):
     logging.warning(f"unknown L7 protocol {x}")
-    return "unknown-ndpi"
+    return "unknown"
 
 
 NDPI_VALUE2CAT = key_dependent_dict(ndpi_value2cat, {v: key  for (key, values) in NDPI_CATEGORIES.items() for v in values})
@@ -172,55 +173,53 @@ SUPPORTED_NDPI = np.sum(list(NDPI_CATEGORIES.values()), initial=[])
 NDPI_FLOWS_COMPLETE = set({f"ndpi_flows:num_flows__{x}" for x in NDPI_CATEGORIES.keys()})
 NDPI_BYTES_RCVD_COMPLETE = set({f"ndpi:bytes_rcvd__{x}" for x in NDPI_CATEGORIES.keys()})
 NDPI_BYTES_SENT_COMPLETE = set({f"ndpi:bytes_sent__{x}" for x in NDPI_CATEGORIES.keys()})
+NDPI_COMPLETE = NDPI_FLOWS_COMPLETE | NDPI_BYTES_RCVD_COMPLETE | NDPI_BYTES_SENT_COMPLETE
 
 
 # ----- ----- FEATURES ----- ----- #
 # ----- ----- -------- ----- ----- #
-# To prevent new feature coming with new versions of ntopng
-BASIC_FEATURES = set([
-    "active_flows:flows_as_client",
-    "active_flows:flows_as_server",
-    "contacts:num_as_client",
-    "contacts:num_as_server",
+BASIC_LEVEL_LOW = set({
+    "traffic:bytes_rcvd", "traffic:bytes_sent", 
+    "echo_packets:packets_rcvd", "echo_packets:packets_sent",
+    "echo_reply_packets:packets_rcvd", "echo_reply_packets:packets_sent",
+    "tcp_packets:packets_rcvd", "tcp_packets:packets_sent",
+    "tcp_rx_stats:lost_packets", "tcp_rx_stats:out_of_order_packets",
+    "tcp_rx_stats:retransmission_packets", "tcp_tx_stats:lost_packets",
+    "tcp_tx_stats:out_of_order_packets", "tcp_tx_stats:retransmission_packets",
+    "udp_pkts:packets_rcvd", "udp_pkts:packets_sent",
+    "udp_sent_unicast:bytes_sent_non_unicast", "udp_sent_unicast:bytes_sent_unicast"})
+BASIC_LEVEL_HIGH = set({
+    "active_flows:flows_as_client", "active_flows:flows_as_server",
+    "total_flows:flows_as_client", "total_flows:flows_as_server",
+    "misbehaving_flows:flows_as_client", "misbehaving_flows:flows_as_server",
+    "unreachable_flows:flows_as_client", "unreachable_flows:flows_as_server",
+    "host_unreachable_flows:flows_as_client", "host_unreachable_flows:flows_as_server",
     "dns_qry_rcvd_rsp_sent:queries_packets",
     "dns_qry_rcvd_rsp_sent:replies_error_packets",
     "dns_qry_rcvd_rsp_sent:replies_ok_packets",
     "dns_qry_sent_rsp_rcvd:queries_packets",
     "dns_qry_sent_rsp_rcvd:replies_error_packets",
     "dns_qry_sent_rsp_rcvd:replies_ok_packets",
-    "echo_packets:packets_rcvd",
-    "echo_packets:packets_sent",
-    "echo_reply_packets:packets_rcvd",
-    "echo_reply_packets:packets_sent",
-    #"engaged_alerts:alerts", (not used)
-    "host_unreachable_flows:flows_as_client",
-    "host_unreachable_flows:flows_as_server",
-    #"l4protos:bytes_rcvd__x", with x an l4 protocol
-    "misbehaving_flows:flows_as_client",
-    "misbehaving_flows:flows_as_server",
-    #"ndpi:bytes_rcvd__x", with x a supported application
-    #"ndpi:bytes_sent__x",
-    #"ndpi_flows:num_flows__x",
-    "tcp_packets:packets_rcvd",
-    "tcp_packets:packets_sent",
-    "tcp_rx_stats:lost_packets",
-    "tcp_rx_stats:out_of_order_packets",
-    "tcp_rx_stats:retransmission_packets",
-    "tcp_tx_stats:lost_packets",
-    "tcp_tx_stats:out_of_order_packets",
-    "tcp_tx_stats:retransmission_packets",
-    #"total_alerts:alerts", (not used)
-    #"total_flow_alerts:alerts", (not used)
-    "total_flows:flows_as_client",
-    "total_flows:flows_as_server",
-    "traffic:bytes_rcvd",
-    "traffic:bytes_sent",
-    "udp_pkts:packets_rcvd",
-    "udp_pkts:packets_sent",
-    "udp_sent_unicast:bytes_sent_non_unicast",
-    "udp_sent_unicast:bytes_sent_unicast",
-    "unreachable_flows:flows_as_client",
-    "unreachable_flows:flows_as_server"])
+    "contacts:num_as_client", "contacts:num_as_server",
+})
+# To prevent new feature coming with new versions of ntopng
+BASIC_FEATURES = BASIC_LEVEL_LOW | BASIC_LEVEL_HIGH
 FEATURES_COMPLETE = copy.deepcopy(BASIC_FEATURES)
 FEATURES_COMPLETE |= NDPI_FLOWS_COMPLETE | NDPI_BYTES_RCVD_COMPLETE | NDPI_BYTES_SENT_COMPLETE
 FEATURES_COMPLETE |= L4_BYTES_RCVD_COMPLETE | L4_BYTES_SENT_COMPLETE
+
+
+# ----- ----- FEATURES LEVELS ----- ----- #
+# ----- ----- --------------- ----- ----- #
+FEATURE_LEVELS = {
+    "high": NDPI_COMPLETE | BASIC_LEVEL_HIGH,
+    "smart": NDPI_FLOWS_COMPLETE | set({
+        "active_flows:flows_as_server", "active_flows:flows_as_client",
+        "traffic:bytes_rcvd", "traffic:bytes_sent", 
+        "contacts:num_as_client", "contacts:num_as_server",
+        "dns_qry_sent_rsp_rcvd:replies_error_packets",
+        "dns_qry_sent_rsp_rcvd:replies_ok_packets",
+        }),
+    "low": BASIC_LEVEL_LOW
+}
+
