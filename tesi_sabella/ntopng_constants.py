@@ -40,8 +40,8 @@ SUPPORTED_L4 = set([
     "fire", "crtp", "crdup", "sscopmce",
     "iplt", "sps", "pipe", "sctp",
     "fc", "divert"])
-L4_BYTES_RCVD_COMPLETE = set([f"l4protos:bytes_rcvd__{x}" for x in SUPPORTED_L4])
-L4_BYTES_SENT_COMPLETE = set([f"l4protos:bytes_sent__{x}" for x in SUPPORTED_L4])
+L4_BYTES_RCVD_COMPLETE = set({f"l4protos:bytes_rcvd__{x}" for x in SUPPORTED_L4})
+L4_BYTES_SENT_COMPLETE = set({f"l4protos:bytes_sent__{x}" for x in SUPPORTED_L4})
 
 
 # ----- ----- NDPI ----- ----- #
@@ -58,8 +58,11 @@ NDPI_CATEGORIES = {
         "ftp", "ntp", "telnet", 
         "ssh", "rsync", "git", 
         "tftp", "ftp_control", "ftp_data"],
-    "mail_service": ["pop", "smtp", "imap", "gmail", "smtps", "pop3"],
+    "mail_service": [
+        "pop", "smtp", "imap", 
+        "gmail", "smtps", "pop3", "imaps"],
     "file_sharing": ["directdownloadlink", "aimini", "applejuice"],
+    "mining": ["mining"],
     "p2p_file_sharing": [
         "stealthnet", "filetopia", "kazaa/fasttrack",
         "gnutella", "edonkey", "bittorrent",
@@ -79,7 +82,7 @@ NDPI_CATEGORIES = {
     "document-editing": [ "office365", "googledocs" ],
     "update": ["windowsupdate"],
     "routing": [
-        "bgp", "dhcp", "vrrp", "igmp"
+        "bgp", "dhcp", "vrrp", "igmp",
         "egp", "ospf", "megaco", "dhcpv6"],
     "video-media": ["youtube", "netflix", "twitch", "1kxun"],
     "chat": [
@@ -122,7 +125,7 @@ NDPI_CATEGORIES = {
         "smb", "afp", "ldap", 
         "http application activesync"],
     "voip": ["mgcp", "iax", "truphone", "teamspeak", "whatsapp voice", "stun", "tuenti"],
-    "real-time-media-protocol": ["h323", "rtcp", "rtp", "sip"],
+    "real-time-media-protocol": ["h323", "rtcp", "rtp", "sip", "rtmp"],
     "other-l4": ["quic", "sctp"],
     "rpc": ["rx", "dce_rpc"],
     "osi-l5": ["netbios"],
@@ -130,18 +133,19 @@ NDPI_CATEGORIES = {
     "tunneling": ["ip in ip", "gtp", "gre"],
     "android-specific": ["googleservices"], 
     "iot": ["coap"],
-    "proxy": ["apache jserv protocol", "socks", "http_proxy", "ajp"],
+    "proxy": ["apache jserv protocol", "socks", "http_proxy", "ajp"],
+    "mobile-specific": ["applepush"],
     "other": [
         "teredo",  "vmware",
         "citrix", "i23v5", "socrates",
         "off", "flash", "windowsmedia",
-        "thunder/webthunder", "msn", ,
+        "thunder/webthunder", "msn",
         "http connect (ssl over http)", 
         "lotusnotes", "sap" , "noe",
         "ciscoskinny", "oracle", "corba",
         "mms", "move", "cnn", "whois-das",
         "cloudflare", "pastebin", "targus dataspeed",
-        "dnp3"]
+        "dnp3", "pops"]
 }
 
 
@@ -161,6 +165,7 @@ class key_dependent_dict(defaultdict):
 def ndpi_value2cat(x):
     logging.warning(f"unknown L7 protocol {x}")
     return "unknown-ndpi"
+
 
 NDPI_VALUE2CAT = key_dependent_dict(ndpi_value2cat, {v: key  for (key, values) in NDPI_CATEGORIES.items() for v in values})
 SUPPORTED_NDPI = np.sum(list(NDPI_CATEGORIES.values()), initial=[])
