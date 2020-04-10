@@ -24,11 +24,11 @@ class FluxDataGenerator():
         wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', self.windowsize).groups() 
         self.window_timedelta = np.timedelta64(wndsize_val, wndsize_unit)
 
-    def to_pandas(self, diff=False):
+    def to_pandas(self, delta=False):
         if self.samples is None:
             raise ValueError('No samples available')
         samples_df = self.samples.copy(deep=True)
-        if not diff:
+        if not delta:
             return samples_df
 
         avoid_diff_cols = ["active_flows:flows_as_client", "active_flows:flows_as_server"]
@@ -88,7 +88,7 @@ class FluxDataGenerator():
         # Building dframe ..... # 
         new_samples['_key'] = new_samples['_measurement'].str.replace('host:', '') + ':' + new_samples['_field']
         new_samples = new_samples.pivot_table(index=["device_category", "host", "_time"], 
-                                              columns="_key", values="_value", aggfunc="mean")
+                                              columns="_key", values="_value", aggfunc=np.sum)
         new_samples.columns = new_samples.columns.rename(None)
         # Drop cutted samples. E.g. range(start=13:46:58, stop:13:49:00) have almost for sure NaN in the first 2 seconds) 
         # Thus we drop NaN values from bytes_rcvd which should never be NaN
