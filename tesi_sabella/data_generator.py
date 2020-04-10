@@ -69,8 +69,8 @@ class FluxDataGenerator():
         q = self.query(start, stop)
         new_samples = self.fluxclient(q, grouby=False).dframe
         if new_samples is None:
-            self.last_timestamp = utcnow
-            return utcnow, None 
+            self.last_timestamp = utcnow if stop is None else stop
+            return self.last_timestamp, None 
 
         # Transforming existing ndpi flows to measurements ..... #
         host_ndpi_flows = new_samples.loc[new_samples["_measurement"]=="host:ndpi_flows"]
@@ -80,9 +80,6 @@ class FluxDataGenerator():
         host_ndpi_bytes = new_samples.loc[new_samples["_measurement"]=="host:ndpi"]
         host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
         new_samples.loc[host_ndpi_bytes.index, "_field"] += ("__" + host_ndpi_bytes_cat)
-        # Transforming existing l4-proto to measurements ..... #
-        host_l4protos = new_samples.loc[new_samples["_measurement"]=="host:l4protos"]
-        new_samples.loc[host_l4protos.index, "_field"] += ("__" + host_l4protos["l4proto"])
         # Device category ..... #
         new_samples['device_category'] = new_samples.apply(self.category_map, axis=1)
         # Building dframe ..... # 
@@ -93,7 +90,7 @@ class FluxDataGenerator():
         # Drop cutted samples. E.g. range(start=13:46:58, stop:13:49:00) have almost for sure NaN in the first 2 seconds) 
         # Thus we drop NaN values from bytes_rcvd which should never be NaN
         new_samples.dropna(subset=["traffic:bytes_rcvd"])
-        # ndpi and l4 protocols have often NaN
+        # ndpi protocols have often NaN
         new_samples = new_samples.fillna(0)
         # Adding missing columns ..... #
         missing_columns = []
@@ -101,8 +98,8 @@ class FluxDataGenerator():
         missing_columns += ntopng_c.NDPI_FLOWS_COMPLETE - available_columns 
         missing_columns += ntopng_c.NDPI_BYTES_RCVD_COMPLETE - available_columns 
         missing_columns += ntopng_c.NDPI_BYTES_SENT_COMPLETE - available_columns 
-        missing_columns += ntopng_c.L4_BYTES_RCVD_COMPLETE - available_columns 
-        missing_columns += ntopng_c.L4_BYTES_SENT_COMPLETE - available_columns 
+        # missing_columns += ntopng_c.L4_BYTES_RCVD_COMPLETE - available_columns 
+        # missing_columns += ntopng_c.L4_BYTES_SENT_COMPLETE - available_columns 
         new_samples = new_samples.reindex(columns=new_samples.columns.tolist() + missing_columns, fill_value=0)
         # Updating ..... #
         # Checking to have only valid columns

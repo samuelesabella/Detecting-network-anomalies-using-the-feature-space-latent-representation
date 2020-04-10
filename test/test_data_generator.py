@@ -10,22 +10,20 @@ from tesi_sabella.data_generator import FluxDataGenerator
 
 # ----- ----- CONSTANTS ----- ----- #
 # ----- ----- --------- ----- ----- #
-MOCK_L4_BYTES_RCVD_COMPLETE = set([ "l4protos:bytes_rcvd__icmp" ])
-MOCK_L4_BYTES_SENT_COMPLETE = set([ "l4protos:bytes_sent__icmp" ])
 
 MOCK_NDPI_FLOWS_COMPLETE = set([
-    "ndpi_flows:num_flows__gaming",
-    "ndpi_flows:num_flows__p2p_file_sharing"])
+    "ndpi_flows:num_flows__game",
+    "ndpi_flows:num_flows__download-filetransfer-filesharing"])
 MOCK_NDPI_BYTES_RCVD_COMPLETE = set([
-    "ndpi:bytes_rcvd__gaming",
-    "ndpi:bytes_rcvd__p2p_file_sharing"])
+    "ndpi:bytes_rcvd__game",
+    "ndpi:bytes_rcvd__download-filetransfer-filesharing"])
 MOCK_NDPI_BYTES_SENT_COMPLETE = set([
-    "ndpi:bytes_sent__gaming",
-    "ndpi:bytes_sent__p2p_file_sharing"])
+    "ndpi:bytes_sent__game",
+    "ndpi:bytes_sent__download-filetransfer-filesharing"])
 MOCK_NDPI_VALUE2CAT = {
-    'gnutella': 'p2p_file_sharing',
-    'warcraft3': 'gaming',
-    'quake': 'gaming'}
+    "gnutella": "download-filetransfer-filesharing",
+    "warcraft3": "game",
+    "quake": "game"}
 
 MOCK_BASIC_FEATURES = set([
     "traffic:bytes_rcvd",
@@ -33,7 +31,6 @@ MOCK_BASIC_FEATURES = set([
     "active_flows:flows_as_server"])
 MOCK_FEATURES_COMPLETE = copy.deepcopy(MOCK_BASIC_FEATURES)
 MOCK_FEATURES_COMPLETE |= MOCK_NDPI_FLOWS_COMPLETE | MOCK_NDPI_BYTES_SENT_COMPLETE | MOCK_NDPI_FLOWS_COMPLETE
-MOCK_FEATURES_COMPLETE |= MOCK_L4_BYTES_RCVD_COMPLETE | MOCK_L4_BYTES_SENT_COMPLETE
 
 
 # ----- ----- DUMMY VALUES ----- ----- #
@@ -42,7 +39,6 @@ mock_qresult = pd.DataFrame([
     ("192.168.10.1", 0.0,  "2020-04-03 12:25:15", None,   None,        "bytes_rcvd",      "host:traffic"),
     ("192.168.10.1", 10.,  "2020-04-03 12:25:15", None,   None,        "flows_as_client", "host:active_flows"),
     ("192.168.10.1", 10.5, "2020-04-03 12:25:15", None,   None,        "flows_as_server", "host:active_flows"),
-    ("192.168.10.1", 20.,  "2020-04-03 12:25:15", "icmp", None,        "bytes_rcvd",      "host:l4protos"),
     ("192.168.10.1", 40.0, "2020-04-03 12:25:15", None,   "gnutella",  "num_flows",      "host:ndpi_flows"),
     ("192.168.10.1", 50.,  "2020-04-03 12:25:15", None,   "warcraft3", "num_flows",      "host:ndpi_flows"),
     ("192.168.10.1", 51.,  "2020-04-03 12:25:15", None,   "quake",     "num_flows",      "host:ndpi_flows"),
@@ -50,7 +46,6 @@ mock_qresult = pd.DataFrame([
     ("192.168.10.1", 1.0,  "2020-04-03 12:25:30", None,   None,        "bytes_rcvd",      "host:traffic"),
     ("192.168.10.1", 11.,  "2020-04-03 12:25:30", None,   None,        "flows_as_client", "host:active_flows"),
     ("192.168.10.1", 11.5, "2020-04-03 12:25:30", None,   None,        "flows_as_server", "host:active_flows"),
-    ("192.168.10.1", 21.,  "2020-04-03 12:25:30", "icmp", None,        "bytes_rcvd",      "host:l4protos"),
     ("192.168.10.1", 41.,  "2020-04-03 12:25:30", None,   "gnutella",  "num_flows",       "host:ndpi_flows"),
     ("192.168.10.1", 51.,  "2020-04-03 12:25:30", None,   "warcraft3", "num_flows",       "host:ndpi_flows"),
     ("192.168.10.1", 52.,  "2020-04-03 12:25:30", None,   "quake",     "num_flows",       "host:ndpi_flows"),
@@ -58,7 +53,6 @@ mock_qresult = pd.DataFrame([
     ("192.168.10.1", 2.0,  "2020-04-03 12:25:45", None,   None,        "bytes_rcvd",      "host:traffic"),
     ("192.168.10.1", 12.,  "2020-04-03 12:25:45", None,   None,        "flows_as_client", "host:active_flows"),
     ("192.168.10.1", 12.5, "2020-04-03 12:25:45", None,   None,        "flows_as_server", "host:active_flows"),
-    ("192.168.10.1", 22.,  "2020-04-03 12:25:45", "icmp", None,        "bytes_rcvd",      "host:l4protos"),
     ("192.168.10.1", 42.1, "2020-04-03 12:25:45", None,   "gnutella",  "num_flows",       "host:ndpi_flows"),
     ("192.168.10.1", 52.,  "2020-04-03 12:25:45", None,   "warcraft3", "num_flows",       "host:ndpi_flows"),
     ("192.168.10.1", 53.,  "2020-04-03 12:25:45", None,   "quake",     "num_flows",       "host:ndpi_flows"),
@@ -66,19 +60,16 @@ mock_qresult = pd.DataFrame([
     ("192.168.10.1", 3.0,  "2020-04-03 12:26:00", None,   None,        "bytes_rcvd",      "host:traffic"),
     ("192.168.10.1", 13.,  "2020-04-03 12:26:00", None,   None,        "flows_as_client", "host:active_flows"), 
     ("192.168.10.1", 13.5, "2020-04-03 12:26:00", None,   None,        "flows_as_server", "host:active_flows"),
-    ("192.168.10.1", 23.,  "2020-04-03 12:26:00", "icmp", None,        "bytes_rcvd",      "host:l4protos"),
     ("192.168.10.1", 43.3, "2020-04-03 12:26:00", None,   "gnutella",  "num_flows",       "host:ndpi_flows"),
     ("192.168.10.1", 53.,  "2020-04-03 12:26:00", None,   "warcraft3", "num_flows",       "host:ndpi_flows"),
 ], columns=["host", "_value", "_time", "l4proto", "protocol", "_field", "_measurement"])
-mock_qresult["_time"] = mock_qresult["_time"].apply(lambda s: pd.to_datetime(s, format='%Y-%m-%d %H:%M:%S'))
+mock_qresult["_time"] = mock_qresult["_time"].apply(lambda s: pd.to_datetime(s, format="%Y-%m-%d %H:%M:%S"))
 
 
 # ----- ----- TESTING ----- ----- #
 # ----- ----- ------- ----- ----- #
 @patch("ntopng_constants.FEATURES_COMPLETE",        MOCK_FEATURES_COMPLETE)
 @patch("ntopng_constants.BASIC_FEATURES",           MOCK_BASIC_FEATURES)
-@patch("ntopng_constants.L4_BYTES_RCVD_COMPLETE",   MOCK_L4_BYTES_RCVD_COMPLETE)
-@patch("ntopng_constants.L4_BYTES_SENT_COMPLETE",   MOCK_L4_BYTES_SENT_COMPLETE)
 @patch("ntopng_constants.NDPI_FLOWS_COMPLETE",      MOCK_NDPI_FLOWS_COMPLETE)
 @patch("ntopng_constants.NDPI_BYTES_RCVD_COMPLETE", MOCK_NDPI_BYTES_RCVD_COMPLETE)
 @patch("ntopng_constants.NDPI_BYTES_SENT_COMPLETE", MOCK_NDPI_BYTES_SENT_COMPLETE)
@@ -105,24 +96,10 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
             ("unknown device class", "192.168.10.1", "2020-04-03 12:26:00"): [3., 13.]
         }).T
         target.columns = ["traffic:bytes_rcvd", "active_flows:flows_as_client"]
-        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format='%Y-%m-%d %H:%M:%S')) for (dc, h, d) in target.index])
-        target.index = target.index.rename(['device_category', 'host', '_time'])
+        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format="%Y-%m-%d %H:%M:%S")) for (dc, h, d) in target.index])
+        target.index = target.index.rename(["device_category", "host", "_time"])
         
         pd.testing.assert_frame_equal(sample[target.columns], target, check_like=True)
-
-    def test_l4(self):
-        _, sample = self.cicids2017.pull()
-        target = pd.DataFrame({
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:25:15"): [20.],
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:25:30"): [21.],
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:25:45"): [22.],  
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:26:00"): [23.] 
-        }).T
-        target.columns = ["l4protos:bytes_rcvd__icmp"]
-        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format='%Y-%m-%d %H:%M:%S')) for (dc, h, d) in target.index])
-        target.index = target.index.rename(['device_category', 'host', '_time'])
-    
-        pd.testing.assert_frame_equal(sample[MOCK_L4_BYTES_RCVD_COMPLETE], target, check_like=True)
 
     def test_ndpi(self):
         _, sample = self.cicids2017.pull()
@@ -132,9 +109,9 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
             ("unknown device class", "192.168.10.1", "2020-04-03 12:25:45"): [42.1, 105.],  
             ("unknown device class", "192.168.10.1", "2020-04-03 12:26:00"): [43.3, 53.] 
         }).T
-        target.columns = ["ndpi_flows:num_flows__p2p_file_sharing", "ndpi_flows:num_flows__gaming"]
-        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format='%Y-%m-%d %H:%M:%S')) for (dc, h, d) in target.index])
-        target.index = target.index.rename(['device_category', 'host', '_time'])
+        target.columns = ["ndpi_flows:num_flows__download-filetransfer-filesharing", "ndpi_flows:num_flows__game"]
+        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format="%Y-%m-%d %H:%M:%S")) for (dc, h, d) in target.index])
+        target.index = target.index.rename(["device_category", "host", "_time"])
         
         pd.testing.assert_frame_equal(sample[MOCK_NDPI_FLOWS_COMPLETE], target, check_like=True)
 
@@ -156,9 +133,9 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
             ("unknown device class", "192.168.10.1", "2020-04-03 12:26:45"): [1., 1.1, 16.5],  
             ("unknown device class", "192.168.10.1", "2020-04-03 12:27:00"): [1., 1.2, 17.5] 
         }).T
-        target.columns = ["traffic:bytes_rcvd", "ndpi_flows:num_flows__p2p_file_sharing", "active_flows:flows_as_server"]
-        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format='%Y-%m-%d %H:%M:%S')) for (dc, h, d) in target.index])
-        target.index = target.index.rename(['device_category', 'host', '_time'])
+        target.columns = ["traffic:bytes_rcvd", "ndpi_flows:num_flows__download-filetransfer-filesharing", "active_flows:flows_as_server"]
+        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format="%Y-%m-%d %H:%M:%S")) for (dc, h, d) in target.index])
+        target.index = target.index.rename(["device_category", "host", "_time"])
 
         pd.testing.assert_frame_equal(dset[target.columns], target, check_like=True)
 
@@ -182,12 +159,12 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
             ("unknown device class", "192.168.50.0", "2020-04-03 12:26:00"): [18., 58.3, 68.,  28.5],  
         }).T
         target.columns = [
-            "traffic:bytes_rcvd", "ndpi_flows:num_flows__p2p_file_sharing", 
-            "ndpi_flows:num_flows__gaming", "active_flows:flows_as_server"]
-        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format='%Y-%m-%d %H:%M:%S')) for (dc, h, d) in target.index])
-        target.index = target.index.rename(['device_category', 'host', '_time'])
+            "traffic:bytes_rcvd", "ndpi_flows:num_flows__download-filetransfer-filesharing", 
+            "ndpi_flows:num_flows__game", "active_flows:flows_as_server"]
+        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format="%Y-%m-%d %H:%M:%S")) for (dc, h, d) in target.index])
+        target.index = target.index.rename(["device_category", "host", "_time"])
 
         pd.testing.assert_frame_equal(dset[target.columns], target, check_like=True)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
