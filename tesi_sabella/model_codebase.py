@@ -56,6 +56,7 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7):
     wlen = int(w_minutes * 4) # Samples per minutes (one sample every 15 seconds)
     sub_wlen = int(sub_w_minutes * 4)
     for _, ts in df.groupby(level=['category', 'host']):
+        # TODO: iterate also on gaps (apply this loop only to continuous time series)
         ctx_wnds = list(mit.windowed(ts, wlen, sub_wlen))
         activities_wnd = map(lambda x: random_sublist(x, sub_wlen), ctx_wnds)
         coherency_tuples = map(lambda v: coherency_generator(*v, ctx_wnds), enumerate(ctx_wnds))

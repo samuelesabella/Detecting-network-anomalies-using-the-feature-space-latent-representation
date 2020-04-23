@@ -207,7 +207,7 @@ NDPI_DEFAULTS = {
     "wechat":               "chat",
     "mpeg_ts":              "media",
     "snapchat":             "socialnetwork",
-    "sinaweibo":            "socialnetwork",
+    "sina(weibo)":         "socialnetwork",
     "googlehangoutduo":     "voip",
     "iflix":                "video",
     "github":               "collaborative",
@@ -250,7 +250,7 @@ NDPI_DEFAULTS = {
     "amazonvideo":          "cloud",
     "googledocs":           "collaborative",
     "whatsappfiles":        "download-filetransfer-filesharing",
-    "targusdataspeed":      "network",
+    "targus dataspeed":      "network",
     "dnp3":                 "network",
     "iec60870":             "network",
     "bloomberg":            "network",
@@ -275,13 +275,13 @@ class key_dependent_dict(defaultdict):
 
 def ndpi_value2cat(x):
     logging.warning(f"unknown L7 protocol {x}")
-    return ("unknown", -1)
+    return "unmapped ndpi"
 
 
 NDPI_VALUE2CAT = key_dependent_dict(ndpi_value2cat, NDPI_DEFAULTS)
-NDPI_FLOWS_COMPLETE = set({f"ndpi_flows:num_flows__{x}" for x in NDPI_VALUE2CAT.keys()})
-NDPI_BYTES_RCVD_COMPLETE = set({f"ndpi:bytes_rcvd__{x}" for x in NDPI_VALUE2CAT.keys()})
-NDPI_BYTES_SENT_COMPLETE = set({f"ndpi:bytes_sent__{x}" for x in NDPI_VALUE2CAT.keys()})
+NDPI_FLOWS_COMPLETE = set({f"ndpi_flows:num_flows__{x}" for x in NDPI_VALUE2CAT.values()})
+NDPI_BYTES_RCVD_COMPLETE = set({f"ndpi:bytes_rcvd__{x}" for x in NDPI_VALUE2CAT.values()})
+NDPI_BYTES_SENT_COMPLETE = set({f"ndpi:bytes_sent__{x}" for x in NDPI_VALUE2CAT.values()})
 NDPI_COMPLETE = NDPI_FLOWS_COMPLETE | NDPI_BYTES_RCVD_COMPLETE | NDPI_BYTES_SENT_COMPLETE
 
 

@@ -6,56 +6,111 @@ import time
 import pandas as pd
 import pyfluxc.pyfluxc as flux
 import pathlib 
+import requests 
 import ntopng_constants as ntopng_c
+import sys
 
 import importlib
 importlib.reload(flux)
 
 
+# ----- ----- PREPROCESSING ----- ----- #
+# ----- ----- ------------- ----- ----- #
+def fill_zero_traffic(df):
+    """Replace zero traffic holes with rolling window mean
+    """
+    traffic = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
+    missing_traffic = (df[traffic] == 0).all(axis=1)
+    df[missing_traffic].replace(0, np.NaN)
+    r_mean = df[traffic].rolling(min_periods=2, window=3, center=True).sum() / 2
+    df.loc[missing_traffic, traffic] = r_mean[missing_traffic]
+    return df
+
+def preprocessing(df):
+    df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
+    df = fill_zero_traffic(df)
+
+    # DPI unit length normalization ..... #
+    ndpi_num_flows_c = [c for c in df.columns if "ndpi_flows:num_flows" in c]
+    ndpi = df[ndpi_num_flows_c]
+    ndpi_sum = ndpi.sum(axis=1)
+    df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum, axis=0)        
+
+    # Non decreasing delta discretization ..... #
+    non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
+    df[non_decreasing] = df[non_decreasing].diff()
+    df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
+
+    # Min max scaling for others ..... #
+    other_cols = [c for c in df.columns if c not in ndpi_num_flows_c and c not in non_decreasing]
+    other_cols_min = df[other_cols].min()
+    other_cols_max = df[other_cols].max()
+    df.loc[:, other_cols] = (df.loc[:, other_cols] - other_cols_min) / (other_cols_max - other_cols_min)
+
+    return df
+
+
+
 # ----- ----- HOST DATA GENERATOR ----- ----- #
 # ----- ----- ------------------- ----- ----- #
 class FluxDataGenerator():
-    def __init__(self, bucket, windowsize, fluxclient, start):
+    def __init__(self, bucket, windowsize, fluxclient, start, ntopng_conf):
         self.last_timestamp = start
         self.samples = None
         self.fluxclient = fluxclient
         self.bucket = bucket
+        self.ntopng_conf = ntopng_conf
+        self.host_map = {}
         self.windowsize = windowsize
         wndsize_val, wndsize_unit = re.match(r'([0-9]+)([a-zA-Z]+)', self.windowsize).groups() 
         self.window_timedelta = np.timedelta64(wndsize_val, wndsize_unit)
 
-    def to_pandas(self, delta=False):
+    def to_pandas(self):
         if self.samples is None:
             raise ValueError('No samples available')
-        samples_df = self.samples.copy(deep=True)
-        if not delta:
-            return samples_df
+        return self.samples.copy(deep=True)
 
-        avoid_diff_cols = ["active_flows:flows_as_client", "active_flows:flows_as_server"]
-        to_diff_cols = samples_df.columns.difference(avoid_diff_cols)
-        samples_df[to_diff_cols] = samples_df[to_diff_cols].diff()
-        samples_df = samples_df.groupby(level=1, group_keys=False).apply(lambda group: group.iloc[1:])
-        return samples_df
+    #@staticmethod
+    #def fix_jumps(df):
+    #    host_groups = df.groupby(['device_category', 'host'])
+    #    for (_, h), host_samples in host_groups:
+    #        times = host_samples.index.sort_values(ascending=True)
+    #        delta = times.to_series().diff()[1:]
+    #        delta_gap = filter(lambda x: x[1] > window_timedelta, enumerate(delta))
 
     @staticmethod
-    def pre_processing(df, level="smart"):
-        df = df[ntopng_c.FEATURE_LEVELS[level]].copy(deep=True)
+    def fix_zero_traffic(df):
+        """Replace zero traffic holes with zero mean
+        """
+        traffic = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
 
-        # dpi unit length normalization ..... #
-        ndpi_cols = [c for c in df.columns if "ndpi" in c]
-        ndpi_subcols = []
-        ndpi_subcols.append([c for c in ndpi_cols if "rcvd" in c])
-        ndpi_subcols.append([c for c in ndpi_cols if "sent" in c])
-        ndpi_subcols.append([c for c in ndpi_cols if "num_flows" in c])
-        ndpi_subcols = [x for x in ndpi_subcols if len(x) > 0]
+        zero_traffic = (df[traffic] == 0).all(axis=1)
+        index_hours = df.index.get_level_values("_time").hour
         
-        for ndpi_subc in ndpi_subcols:
-            ndpi = df[ndpi_subc]
-            ndpi_sum = ndpi.sum(axis=1)
-            df.loc[:, ndpi_subc] = ndpi.divide(ndpi_sum, axis=0)
+        missing_traffic = zero_traffic & (index_hours > 8) & (index_hours < 17)
+        df[missing_traffic].replace(0, np.NaN)
+        r_mean = df[traffic].rolling(min_periods=2, window=3, center=True).sum() / 2
+        df[missing_traffic] = r_mean[missing_traffic]
+        return df
+
+    @staticmethod
+    def pre_processing(df):
+        df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
+        df = self.fix_zero_traffic(df)
+
+        # DPI unit length normalization ..... #
+        ndpi_num_flows_c = [c for c in df.columns if "ndpi_flows:num_flows" in c]
+        ndpi = df[ndpi_num_flows_c]
+        ndpi_sum = ndpi.sum(axis=1)
+        df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum, axis=0)        
+
+        # Non decreasing ..... #
+        non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
+        df[non_decreasing] = df[non_decreasing].diff()
+        df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
 
         # Min max scaling ..... #
-        other_cols = [c for c in df.columns if c not in ndpi_cols]
+        other_cols = [c for c in df.columns if c not in ndpi_num_flows_c and c not in non_decreasing]
         other_cols_min = df[other_cols].min()
         other_cols_max = df[other_cols].max()
         df.loc[:, other_cols] = (df.loc[:, other_cols] - other_cols_min) / (other_cols_max - other_cols_min)
@@ -81,7 +136,7 @@ class FluxDataGenerator():
         host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
         new_samples.loc[host_ndpi_bytes.index, "_field"] += ("__" + host_ndpi_bytes_cat)
         # Device category ..... #
-        new_samples['device_category'] = new_samples.apply(self.category_map, axis=1)
+        new_samples['device_category'] = self.category_map(new_samples)
         # Building dframe ..... # 
         new_samples['_key'] = new_samples['_measurement'].str.replace('host:', '') + ':' + new_samples['_field']
         new_samples = new_samples.pivot_table(index=["device_category", "host", "_time"], 
@@ -91,15 +146,13 @@ class FluxDataGenerator():
         # Thus we drop NaN values from bytes_rcvd which should never be NaN
         new_samples.dropna(subset=["traffic:bytes_rcvd"])
         # ndpi protocols have often NaN
-        new_samples = new_samples.fillna(0)
+        # new_samples = new_samples.fillna(0)
         # Adding missing columns ..... #
         missing_columns = []
         available_columns = set(new_samples.columns)
         missing_columns += ntopng_c.NDPI_FLOWS_COMPLETE - available_columns 
         missing_columns += ntopng_c.NDPI_BYTES_RCVD_COMPLETE - available_columns 
         missing_columns += ntopng_c.NDPI_BYTES_SENT_COMPLETE - available_columns 
-        # missing_columns += ntopng_c.L4_BYTES_RCVD_COMPLETE - available_columns 
-        # missing_columns += ntopng_c.L4_BYTES_SENT_COMPLETE - available_columns 
         new_samples = new_samples.reindex(columns=new_samples.columns.tolist() + missing_columns, fill_value=0)
         # Updating ..... #
         # Checking to have only valid columns
@@ -137,98 +190,59 @@ class FluxDataGenerator():
         q.group(columns=["_time", "host"])
         return q
 
-    def category_map(self, qres_row):
-        return "unknown device class"
+    def category_map(self, new_samples):
+        unique_hosts = new_samples.unique()
+        unique_unknonw = [x for x in unique_hosts if x not in self.host_map]
 
-    def check_jumps(self, new_samples):
-        if self.samples is None or new_samples is None:
-            return
-        last_timestamp = {}
-        one_second = np.timedelta64(1000000000, 'ns')
-
-        g = new_samples.groupby(['device_category', 'host'])
-        for (_, host), host_samples in g:
-            s_times = host_samples.index.get_level_values(2).sort_values(ascending=True)
-            s_times = s_times.sort_values(ascending=True)
-            last_timestamp[host] = s_times[0]
-            # intra-sample jump check ..... #
-            delta = np.diff(s_times.values)
-            blind_spot = [(*s_times[i:i+2], x_delta) for i, x_delta in enumerate(delta)]
-            blind_spot = filter(lambda x: x[2] > self.window_timedelta, blind_spot)
-            blind_spot = [(*x[:2], x[2] / one_second) for x in blind_spot]
-            blind_spot = pd.DataFrame(blind_spot, columns=["start", "stop", "seconds"])
-            if len(blind_spot) > 0:
-                raise RuntimeError(f"Intra blind spots for {host}: \n {blind_spot}")
-
-        # inter-sample check ..... #    
-        g = self.samples.groupby(['device_category', 'host'])
-        for (_, host), host_samples in g:
-            if host not in last_timestamp:
-                continue
-            old_s_times = host_samples.index.get_level_values(2).sort_values(ascending=True)
-            old_s_times = old_s_times.sort_values(ascending=True)
-            last_old_ts = old_s_times[-1]
-            if (last_old_ts - last_timestamp[host]).to_numpy() > self.window_timedelta:
-                raise RuntimeError(f"Inter-poll blind spot for host: {host}")
-
-
-# ----- ----- CICIDS2017 ----- ----- #
-# ----- ----- ---------- ----- ----- #
-CICIDS2017_IPV4_NETMAP = {
-    "192.168.10.3": "server",
-    "192.168.10.50": "server",
-    "192.168.10.51": "server",
-    "205.174.165.68": "server",
-    "205.174.165.66": "server", 
-
-    "192.168.10.19": "pc",
-    "192.168.10.17": "pc",
-    "192.168.10.16": "pc",
-    "192.168.10.12": "pc",
-    "192.168.10.9": "pc",
-    "192.168.10.5": "pc",
-    "192.168.10.8": "pc",
-    "192.168.10.14": "pc",
-    "192.168.10.15": "pc",
-    "192.168.10.25": "pc",
-}
-
-
-class CICIDS2017(FluxDataGenerator):
-    def category_map(self, qres_row):
-        hostname = qres_row['host']
-        if hostname in CICIDS2017_IPV4_NETMAP:
-            return CICIDS2017_IPV4_NETMAP[hostname]
-        return "unknown device class"
+        ntopng_host, ntopng_port = self.conf["ntopng"] 
+        ntopng_user, ntopng_passwd = self.conf["ntopng_credentials"]
+        url = f"https://{ntopng_host}:{ntopng_port}/lua/rest/get/host/data.lua?host="
+        params = { "cookie": f"user={ntopng_user}; password={ntopng_passwd}" } 
+        for h in unique_unknonw:
+            r = requests.get(url = url + h, params = params) 
+            # TODO: extract class
+            raise NotImplementedError("TODO")
+            data = r.json()
+        return new_samples["host"].map(self.host_map)
 
 
 # ----- ----- CLI ----- ----- #
 # ----- ----- --- ----- ----- #
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Parser definition ..... #
-    print('packet2ts')
-    parser = argparse.ArgumentParser(description='packet2ts')
-    parser.add_argument('-b', '--bucket',
-                        help='ntop influx database name', default='ntopng')
-    parser.add_argument('-p', '--port', help='influxdb port',
-                        type=int, default=8086)
-    parser.add_argument('-e', '--every', help="poll every x minutes",
-                        type=int, default=15)
-    parser.add_argument('-o', '--output', help="output file name")
+    print("packet2ts")
+    parser = argparse.ArgumentParser(description="packet2ts")
+    parser.add_argument("-b", "--bucket", help="ntopng flux-bucket name", default="ntopng")
+    parser.add_argument("--influxport", help="influxdb port", type=int, default=8086)
+    parser.add_argument("--ntopngport", help="ntopng port", type=int, default=3000)
+    parser.add_argument("--credentials", help="ntopng REST API credential 'user:password'", type=str)
+    parser.add_argument("-e", "--every", help="sample data every X minutes", type=int, default=15)
+    parser.add_argument("-o", "--output", help="output dataframe filename")
     args = parser.parse_args()
+
     if args.output is None:
         args.output = f"{args.bucket}__{datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}.pkl"
+
+    ntopng_credentials = args.credentials.split(":")
+    if len(ntopng_credentials) != 2:
+        print("Error, wrong credential format")
+        sys.exit(0)
+    ntopng_conf = {
+        "ntopng": ("localhost", args.ntopngport),
+        "credentials": ntopng_credentials
+    }
     
-    fclient = flux.FluxClient(host='127.0.0.1', port=args.port); 
+    fclient = flux.FluxClient(host="127.0.0.1", port=args.port); 
     start = pd.Timestamp.utcnow() - pd.DateOffset(minutes=args.every)
-    cicids2017 = CICIDS2017(args.bucket, '15s', fclient, start)
+    generator = FluxDataGenerator(args.bucket, "15s", fclient, start, ntopng_conf)
 
     while True:
         try:
-            cicids2017.pull()
-            df = cicids2017.to_pandas()
-            print(f'Polled at: {datetime.now().strftime("%m.%d.%Y_%H.%M.%S")}')
+            generator.pull()
+            print(f"Polled at: {datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}")
             time.sleep(60 * args.every)
         except KeyboardInterrupt:
-            print('Closing capture')
+            print("Closing capture")
+            df = generator.to_pandas()
+            df.to_pickle(f"{args.output}.pkl")
             break
