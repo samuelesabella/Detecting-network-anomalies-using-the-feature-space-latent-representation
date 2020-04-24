@@ -1,14 +1,17 @@
-import argparse
-import re
-import numpy as np
+from collections import defaultdict
 from datetime import datetime
-import time
-import pandas as pd
-import pyfluxc.pyfluxc as flux
-import pathlib 
-import requests 
+from sklearn.preprocessing import KBinsDiscretizer
+import argparse
 import ntopng_constants as ntopng_c
+import numpy as np
+import pandas as pd
+import pathlib 
+import pyfluxc.pyfluxc as flux
+import re
+import requests 
 import sys
+import time
+import torch
 
 import importlib
 importlib.reload(flux)
@@ -16,6 +19,26 @@ importlib.reload(flux)
 
 # ----- ----- PREPROCESSING ----- ----- #
 # ----- ----- ------------- ----- ----- #
+MORNING =   torch.tensor([1, 0, 0, 0])
+AFTERNOON = torch.tensor([0, 1, 0, 0])
+EVENING   = torch.tensor([0, 0, 1, 0])
+NIGHT     = torch.tensor([0, 0, 0, 1])
+hour2ts = [(MORNING,   range(6,  12)),
+           (AFTERNOON, range(12, 17)),
+           (EVENING,   range(17, 22)),
+           (NIGHT,     range(22, 6))]
+hour2ts = { h: t for t, hrange in hour2ts for h in hrange }
+
+kbins = KBinsDiscretizer(n_bins=7, encode="ordinal", strategy="quantile")
+
+def date_as_feature(df):
+    time_indx = df.index.get_level_values("_time")
+
+    weekend_map = defaultdict(lambda: 0, { 5: 1, 6: 1 })
+    df["is_weekend"] = time_indx.dayofweek.map(weekend_map)
+    df["timeofday"] = time_indx.hour.map(hour2ts)
+    return df
+
 def fill_zero_traffic(df):
     """Replace zero traffic holes with rolling window mean
     """
@@ -42,11 +65,13 @@ def preprocessing(df):
     df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
 
     # Min max scaling for others ..... #
-    other_cols = [c for c in df.columns if c not in ndpi_num_flows_c and c not in non_decreasing]
-    other_cols_min = df[other_cols].min()
-    other_cols_max = df[other_cols].max()
-    df.loc[:, other_cols] = (df.loc[:, other_cols] - other_cols_min) / (other_cols_max - other_cols_min)
+    non_dpi = [ c for c in df.columns if c not in ndpi_num_flows_c ]
+    import pdb; pdb.set_trace() 
+    df[non_dpi] = kbins.fit_transform(df[non_dpi])
 
+    # Date/hour as a feature ..... #
+    df = date_as_feature(df)
+    
     return df
 
 
@@ -157,10 +182,14 @@ class FluxDataGenerator():
         # Updating ..... #
         # Checking to have only valid columns
         new_samples = new_samples[ntopng_c.FEATURES_COMPLETE]
-        self.samples = pd.concat([self.samples, new_samples])
-        cat_host_sample = new_samples.index[0][:2]
-        samples_times = new_samples.loc[cat_host_sample].index 
-        self.last_timestamp = max(samples_times)
+        # Removing duplicate timestamps
+        max_old_samples = self.samples.groupby(level=["device_category", "host"]).apply(lambda x: x.index.max())
+        min_new_samples = new_samples.groupby(level=["device_category", "host"]).apply(lambda x: x.index.min())
+        dup_samples = np.intersect1d(max_old_samples, min_new_samples)
+        new_samples = new_samples.drop(dup_samples)
+        # Merging and updating time
+        self.samples = pd.concat([self.samples, new_samples]) 
+        self.last_timestamp = new_samples.index.get_level_values("_time").max()
 
         return self.last_timestamp, new_samples
 
