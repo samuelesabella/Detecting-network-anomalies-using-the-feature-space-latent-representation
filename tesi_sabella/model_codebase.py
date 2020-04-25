@@ -23,7 +23,10 @@ class RNTrunc():
 zero_one_normal = RNTrunc(.5, .2, (0, 1))
 
 
-def coherency_generator(x, idx, time_windows):
+def coherency_generator(idx, x, time_windows, min_inconsistency_shift):
+    """
+    Minimum shift: 1h
+    """
     r = random.random()
     if r < .25: # Sample from the current context
         return (x, COH_TENSOR)
@@ -31,10 +34,12 @@ def coherency_generator(x, idx, time_windows):
         x_b = time_windows[idx + 1]
         return (x_b, COH_TENSOR)
     if r < .75: # Sample from context distant in time
-        random_shift = random.randint(1, len(time_windows)-idx)
-        if random.random() > .5:
-            random_shift = random.randint(-2, -idx) 
-        x_b = time_windows[idx + 1 + random_shift]
+        shift_direction = True if random.random() > 0 else False
+        if idx > min_inconsistency_shift and (idx + min_inconsistency_shift > len(time_windows) or shift_direction):
+            random_shift = random.randint(0, idx - min_inconsistency_shift)
+        elif idx < min_inconsistency_shift or shift_direction:
+            random_shift = random.randint(idx+min_inconsistency_shift, len(time_windows))
+        x_b = time_windows[random_shift]
         return (x_b, INC_TENSOR)
     return (None, INC_TENSOR) # Sample from full dataset
 
@@ -55,14 +60,15 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7):
     X = []
     wlen = int(w_minutes * 4) # Samples per minutes (one sample every 15 seconds)
     sub_wlen = int(sub_w_minutes * 4)
-    for _, ts in df.groupby(level=['category', 'host']):
-        # TODO: iterate also on gaps (apply this loop only to continuous time series)
-        ctx_wnds = list(mit.windowed(ts, wlen, sub_wlen))
+    min_inconsistency_dis = int(60 / sub_w_minutes) # 1 hour distance
+    for _, ts in df.groupby(level=['device_category', 'host']):
+        ctx_wnds = list(mit.windowed(ts.values, wlen, step=sub_wlen))
+        idx_ctx_wnds = enumerate(ctx_wnds[:-1]) # last item not used to generate tuples
         activities_wnd = map(lambda x: random_sublist(x, sub_wlen), ctx_wnds)
-        coherency_tuples = map(lambda v: coherency_generator(*v, ctx_wnds), enumerate(ctx_wnds))
+        coherency_tuples = map(lambda v: coherency_generator(*v, ctx_wnds, min_inconsistency_dis), idx_ctx_wnds)
         # adding samples
         h_samples = zip(ctx_wnds, activities_wnd, coherency_tuples)
-        for activity, ctx, (coherency_ctx, coherency_label) in h_samples:
+        for ctx, activity, (coherency_ctx, coherency_label) in h_samples:
             X.append({
                 "activity": activity, 
                 "context": ctx, 
@@ -70,11 +76,11 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7):
                 "coherency_label": coherency_label})
 
     def choice_n_merge(x):
-        if x["coherency_ctxs"] is None:
-            x["coherency_ctxs"] = random.choice(X)["context"] 
-        merge = context_merge(x["context"], x["coherency_ctxs"])
-        return (x["activity"], x["context"], merge, x["label"])
-    X = map(choice_n_merge, X)
+        if x["coherency_ctx"] is None:
+            x["coherency_ctx"] = random.choice(X)["context"] 
+        merge = context_merge(x["context"], x["coherency_ctx"])
+        return (x["activity"], x["context"], merge, x["coherency_label"])
+    X = list(map(choice_n_merge, X))
 
     return X
 

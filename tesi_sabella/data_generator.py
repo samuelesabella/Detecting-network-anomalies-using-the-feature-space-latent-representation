@@ -64,10 +64,18 @@ def preprocessing(df):
     df[non_decreasing] = df[non_decreasing].diff()
     df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
 
-    # Min max scaling for others ..... #
-    non_dpi = [ c for c in df.columns if c not in ndpi_num_flows_c ]
-    import pdb; pdb.set_trace() 
-    df[non_dpi] = kbins.fit_transform(df[non_dpi])
+    # Feature discretization ..... #
+    # Note: it was avoided using pandas qcut/cut due to the decoupling between fit and transform 
+    #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
+    #       with weekly data and used multiple times while the model is running
+    def discretize_ts(x):
+        v = x.values.reshape(-1, 1)
+        vd = kbins.fit_transform(v).reshape(-1)
+        return vd
+    non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
+    groups = df[non_dpi].groupby(level=["device_category", "host"], group_keys=False)
+    # Discretize individually each column of each host
+    df[non_dpi] = groups.apply(lambda host_ts: host_ts.apply(discretize_ts))
 
     # Date/hour as a feature ..... #
     df = date_as_feature(df)
@@ -94,53 +102,6 @@ class FluxDataGenerator():
         if self.samples is None:
             raise ValueError('No samples available')
         return self.samples.copy(deep=True)
-
-    #@staticmethod
-    #def fix_jumps(df):
-    #    host_groups = df.groupby(['device_category', 'host'])
-    #    for (_, h), host_samples in host_groups:
-    #        times = host_samples.index.sort_values(ascending=True)
-    #        delta = times.to_series().diff()[1:]
-    #        delta_gap = filter(lambda x: x[1] > window_timedelta, enumerate(delta))
-
-    @staticmethod
-    def fix_zero_traffic(df):
-        """Replace zero traffic holes with zero mean
-        """
-        traffic = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
-
-        zero_traffic = (df[traffic] == 0).all(axis=1)
-        index_hours = df.index.get_level_values("_time").hour
-        
-        missing_traffic = zero_traffic & (index_hours > 8) & (index_hours < 17)
-        df[missing_traffic].replace(0, np.NaN)
-        r_mean = df[traffic].rolling(min_periods=2, window=3, center=True).sum() / 2
-        df[missing_traffic] = r_mean[missing_traffic]
-        return df
-
-    @staticmethod
-    def pre_processing(df):
-        df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
-        df = self.fix_zero_traffic(df)
-
-        # DPI unit length normalization ..... #
-        ndpi_num_flows_c = [c for c in df.columns if "ndpi_flows:num_flows" in c]
-        ndpi = df[ndpi_num_flows_c]
-        ndpi_sum = ndpi.sum(axis=1)
-        df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum, axis=0)        
-
-        # Non decreasing ..... #
-        non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
-        df[non_decreasing] = df[non_decreasing].diff()
-        df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
-
-        # Min max scaling ..... #
-        other_cols = [c for c in df.columns if c not in ndpi_num_flows_c and c not in non_decreasing]
-        other_cols_min = df[other_cols].min()
-        other_cols_max = df[other_cols].max()
-        df.loc[:, other_cols] = (df.loc[:, other_cols] - other_cols_min) / (other_cols_max - other_cols_min)
-
-        return df
 
     def pull(self, start=None, stop=None):
         if not start:
@@ -183,10 +144,11 @@ class FluxDataGenerator():
         # Checking to have only valid columns
         new_samples = new_samples[ntopng_c.FEATURES_COMPLETE]
         # Removing duplicate timestamps
-        max_old_samples = self.samples.groupby(level=["device_category", "host"]).apply(lambda x: x.index.max())
-        min_new_samples = new_samples.groupby(level=["device_category", "host"]).apply(lambda x: x.index.min())
-        dup_samples = np.intersect1d(max_old_samples, min_new_samples)
-        new_samples = new_samples.drop(dup_samples)
+        if self.samples is not None:
+            max_old_samples = self.samples.groupby(level=["device_category", "host"]).apply(lambda x: x.index.max())
+            min_new_samples = new_samples.groupby(level=["device_category", "host"]).apply(lambda x: x.index.min())
+            dup_samples = np.intersect1d(max_old_samples, min_new_samples)
+            new_samples = new_samples.drop(dup_samples)
         # Merging and updating time
         self.samples = pd.concat([self.samples, new_samples]) 
         self.last_timestamp = new_samples.index.get_level_values("_time").max()
