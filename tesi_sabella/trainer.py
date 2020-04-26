@@ -18,7 +18,6 @@ torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--datasetpath", "-d", help="Dataset path")
@@ -27,18 +26,17 @@ if __name__ == "__main__":
     df = pd.read_pickle(args.datasetpath)
     df = generator.preprocessing(df)
     model_samples = cb.ts_windowing(df)
+    train_x, test_x = cb.data_split(model_samples, SEED)
+    import pdb; pdb.set_trace() 
     
-    membedder_net = cb.mEmbeddingNet()
     net = NeuralNet(
-        cb.mEmbeddingNet, 
-        cb.TripletLoss(),
+        cb.Ts2Vec, 
+        cb.Contextual_Coherency,
         optimizer=torch.optim.Adam)
     
     params = {
         'lr': [0.01, 0.02],
         'max_epochs': [10, 20],
-        'module__num_units': [10, 20],
-        'criterion__difficulty': ['hard']
     }
-    gs = GridSearchCV(net, params, refit=False, cv=5)
-    gs_results = gs.fit(tr_x)
+    gs = GridSearchCV(net, params, refit=False, cv=5, scoring=["precision", "recall"])
+    gs_results = gs.fit(model_samples)

@@ -11,6 +11,12 @@ COH_TENSOR = torch.tensor([1, 0])
 
 # ----- ----- DATA RESHAPING ----- ----- #
 # ----- ----- -------------- ----- ----- #
+def data_split(l, seed):
+    random.Random(seed).shuffle(l)
+    train_index = int(len(l) * .80)
+    return l[:train_index], l[train_index:]
+
+
 class RNTrunc():
     def __init__(self, mean, std, clip_values):
         clip_min, clip_max = clip_values
@@ -103,10 +109,11 @@ class Contextual_Coherency():
 # ----- ----- ----- ----- ----- #
 class Ts2Vec(torch.nn.Module):
     def __init__(self):
+        super(Ts2Vec, self).__init__()
         self.embedding = torch.nn.Sequential(
             torch.nn.Linear(10, 10),
             torch.nn.LeakyReLU(),
-            torch.nn.Linear(10, h),
+            torch.nn.Linear(10, 35),
             torch.nn.Sigmoid()
         )
 
