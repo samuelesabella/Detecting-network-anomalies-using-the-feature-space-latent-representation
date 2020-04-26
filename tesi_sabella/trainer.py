@@ -25,9 +25,10 @@ if __name__ == "__main__":
     
     df = pd.read_pickle(args.datasetpath)
     df = generator.preprocessing(df)
-    model_samples = cb.ts_windowing(df)
-    train_x, test_x = cb.data_split(model_samples, SEED)
-    import pdb; pdb.set_trace() 
+    train, test = cb.data_split(model_samples, SEED)
+    model_train = cb.ts_windowing(train)
+    model_test = cb.ts_windowing(test)
+    
     
     net = NeuralNet(
         cb.Ts2Vec, 

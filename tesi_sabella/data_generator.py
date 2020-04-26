@@ -19,10 +19,10 @@ importlib.reload(flux)
 
 # ----- ----- PREPROCESSING ----- ----- #
 # ----- ----- ------------- ----- ----- #
-MORNING =   torch.tensor([1, 0, 0, 0])
-AFTERNOON = torch.tensor([0, 1, 0, 0])
-EVENING   = torch.tensor([0, 0, 1, 0])
-NIGHT     = torch.tensor([0, 0, 0, 1])
+MORNING =   np.array([1, 0, 0, 0])
+AFTERNOON = np.array([0, 1, 0, 0])
+EVENING   = np.array([0, 0, 1, 0])
+NIGHT     = np.array([0, 0, 0, 1])
 hour2ts = [(MORNING,   range(6,  12)),
            (AFTERNOON, range(12, 17)),
            (EVENING,   range(17, 22)),
@@ -36,7 +36,10 @@ def date_as_feature(df):
 
     weekend_map = defaultdict(lambda: 0, { 5: 1, 6: 1 })
     df["is_weekend"] = time_indx.dayofweek.map(weekend_map)
-    df["timeofday"] = time_indx.hour.map(hour2ts)
+    
+    mapped_hours = time_indx.hour.map(hour2ts).values.tolist() 
+    hours_df = pd.DataFrame(mapped_hours, columns=["morning", "afternoon", "evening", "night"], index=df.index)
+    df = pd.concat([df, hours_df], axis=1)
     return df
 
 def fill_zero_traffic(df):

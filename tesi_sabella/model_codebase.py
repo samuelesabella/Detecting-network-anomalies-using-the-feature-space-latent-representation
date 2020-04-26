@@ -3,15 +3,23 @@ import torch.nn.functional as F
 import more_itertools as mit
 from scipy.stats import truncnorm
 import random
+import numpy as np
 
 
-INC_TENSOR = torch.tensor([0, 1])
-COH_TENSOR = torch.tensor([1, 0])
+INCOHERENT = np.array([0, 1])
+COHERENT = np.array([1, 0])
+NORMAL_TRAFFIC = np.array([0, 1])
+ATTACK_TRAFFIC = np.array([1, 0])
 
 
 # ----- ----- DATA RESHAPING ----- ----- #
 # ----- ----- -------------- ----- ----- #
-def data_split(l, seed):
+def data_split(df, seed):
+    """Returns (train_groups, test_groups) with
+        train_groups: list containing continuous samples without attack
+        test_groups: list containing continuous times samples also with attacks
+    """
+    normal_traffic = df[df["status"] == "normal"]
     random.Random(seed).shuffle(l)
     train_index = int(len(l) * .80)
     return l[:train_index], l[train_index:]
@@ -35,19 +43,19 @@ def coherency_generator(idx, x, time_windows, min_inconsistency_shift):
     """
     r = random.random()
     if r < .25: # Sample from the current context
-        return (x, COH_TENSOR)
+        return (x, COHERENT)
     if r < .5: # Sample from the context of the next activity
         x_b = time_windows[idx + 1]
-        return (x_b, COH_TENSOR)
+        return (x_b, COHERENT)
     if r < .75: # Sample from context distant in time
         shift_direction = True if random.random() > 0 else False
         if idx > min_inconsistency_shift and (idx + min_inconsistency_shift > len(time_windows) or shift_direction):
             random_shift = random.randint(0, idx - min_inconsistency_shift)
         elif idx < min_inconsistency_shift or shift_direction:
-            random_shift = random.randint(idx+min_inconsistency_shift, len(time_windows))
+            random_shift = random.randint(idx + min_inconsistency_shift, len(time_windows))
         x_b = time_windows[random_shift]
-        return (x_b, INC_TENSOR)
-    return (None, INC_TENSOR) # Sample from full dataset
+        return (x_b, INCOHERENT)
+    return (None, INCOHERENT) # Sample from full dataset
 
 
 def random_sublist(l, sub_wlen):
@@ -59,8 +67,7 @@ def context_merge(ctx_a, ctx_b):
     # TODO: Multivariate merge
     r = zero_one_normal()
     r_idx = int(len(ctx_a) * r)
-    return (ctx_a[:r_idx] + ctx_b[r_idx:])
-
+    return np.concatenate([ctx_a[:r_idx, :], ctx_b[r_idx:, :]])
 
 def ts_windowing(df, w_minutes=15, sub_w_minutes=7):
     X = []
@@ -68,17 +75,25 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7):
     sub_wlen = int(sub_w_minutes * 4)
     min_inconsistency_dis = int(60 / sub_w_minutes) # 1 hour distance
     for _, ts in df.groupby(level=['device_category', 'host']):
-        ctx_wnds = list(mit.windowed(ts.values, wlen, step=sub_wlen))
+        # Building context windows ..... #
+        ts_status = ts["status"]
+        is_normal_context = np.all(ts_status.unique()== ['normal'])
+        ts_only = ts.drop(columns=["status"])
+        ctx_wnds = mit.windowed(ts_only.values, wlen, step=sub_wlen)
+        # Building activiry window ..... #
+        ctx_wnds = filter(lambda x: x[-1] is not None, ctx_wnds) # Windowing fills empty values
+        ctx_wnds = list(map(np.vstack, ctx_wnds))
         idx_ctx_wnds = enumerate(ctx_wnds[:-1]) # last item not used to generate tuples
         activities_wnd = map(lambda x: random_sublist(x, sub_wlen), ctx_wnds)
+        # Coherency and training tuple generation ...... #
         coherency_tuples = map(lambda v: coherency_generator(*v, ctx_wnds, min_inconsistency_dis), idx_ctx_wnds)
-        # adding samples
-        h_samples = zip(ctx_wnds, activities_wnd, coherency_tuples)
+        h_samples = zip(ctx_wnds, activities_wnd, status, coherency_tuples)
         for ctx, activity, (coherency_ctx, coherency_label) in h_samples:
             X.append({
                 "activity": activity, 
                 "context": ctx, 
                 "coherency_ctx": coherency_ctx, 
+                "context_normal_traffic": NORMAL_TRAFFIC if is_normal_context else ATTACK_TRAFFIC,
                 "coherency_label": coherency_label})
 
     def choice_n_merge(x):
