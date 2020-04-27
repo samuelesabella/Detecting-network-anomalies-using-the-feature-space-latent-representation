@@ -1,7 +1,9 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import more_itertools as mit
 from scipy.stats import truncnorm
+from collections import defaultdict
 import random
 import numpy as np
 
@@ -37,73 +39,83 @@ class RNTrunc():
 zero_one_normal = RNTrunc(.5, .2, (0, 1))
 
 
-def coherency_generator(idx, x, time_windows, min_inconsistency_shift):
+def coherent_context_picker(current_ctx, ctx_idx, context_windows, step_coherency, min_inconsistency_shift):
     """
-    Minimum shift: 1h
+    min_inconsistency_shift -- samples to move at least
     """
     r = random.random()
+    next_non_overlapping_ctx = ctx_idx + step_coherency + 1
     if r < .25: # Sample from the current context
-        return (x, COHERENT)
-    if r < .5: # Sample from the context of the next activity
-        x_b = time_windows[idx + 1]
-        return (x_b, COHERENT)
+        return (current_ctx, COHERENT)
+    if r < .5 and next_non_overlapping_ctx < len(context_windows): # Sample from the context of the next activity
+        ctx_b = context_windows[next_non_overlapping_ctx]
+        return (ctx_b, COHERENT)
     if r < .75: # Sample from context distant in time
         shift_direction = True if random.random() > 0 else False
-        if idx > min_inconsistency_shift and (idx + min_inconsistency_shift > len(time_windows) or shift_direction):
-            random_shift = random.randint(0, idx - min_inconsistency_shift)
-        elif idx < min_inconsistency_shift or shift_direction:
-            random_shift = random.randint(idx + min_inconsistency_shift, len(time_windows))
-        x_b = time_windows[random_shift]
+        min_backward_step = ctx_idx - min_inconsistency_shift
+        min_forward_step = ctx_idx + len(current_ctx) + min_inconsistency_shift
+        if ctx_idx > min_inconsistency_shift and ((ctx_idx > len(context_windows) - min_forward_step) or shift_direction):
+            # sample context before
+            random_shift = random.randint(0, min_backward_step)
+        else:
+            # sample context after
+            random_shift = random.randint(min_forward_step, len(context_windows) - 1)
+        x_b = context_windows[random_shift]
         return (x_b, INCOHERENT)
     return (None, INCOHERENT) # Sample from full dataset
 
 
 def random_sublist(l, sub_wlen):
-    r = random.randint(0, len(l)-sub_wlen)
+    r = int((len(l) - sub_wlen) * zero_one_normal())
     return l[r:r+sub_wlen]
-    
 
-def context_merge(ctx_a, ctx_b):
-    # TODO: Multivariate merge
-    r = zero_one_normal()
-    r_idx = int(len(ctx_a) * r)
-    return np.concatenate([ctx_a[:r_idx, :], ctx_b[r_idx:, :]])
 
 def ts_windowing(df, w_minutes=15, sub_w_minutes=7):
-    X = []
-    wlen = int(w_minutes * 4) # Samples per minutes (one sample every 15 seconds)
-    sub_wlen = int(sub_w_minutes * 4)
-    min_inconsistency_dis = int(60 / sub_w_minutes) # 1 hour distance
+    if df.columns[-1] != "status":
+        raise ValueError("Wrong dataframe format")
+
+    train_samples = defaultdict(list)
+    # Context window length
+    context_wlen = int(w_minutes * 4) # Samples per minutes (one sample every 15 seconds)
+    # Activity window length
+    activity_wlen = int(sub_w_minutes * 4)
+    # 1 hour distance to have inconsistent context (4 samples per minutes)
+    min_inconsistency_dis = 4 * 60
+
     for _, ts in df.groupby(level=['device_category', 'host']):
-        # Building context windows ..... #
-        ts_status = ts["status"]
-        is_normal_context = np.all(ts_status.unique()== ['normal'])
-        ts_only = ts.drop(columns=["status"])
-        ctx_wnds = mit.windowed(ts_only.values, wlen, step=sub_wlen)
-        # Building activiry window ..... #
-        ctx_wnds = filter(lambda x: x[-1] is not None, ctx_wnds) # Windowing fills empty values
+        # Building context/activity windows ..... #
+        ctx_wnds = mit.windowed(ts.values, context_wlen, step=1)
+        # Windowing operation fills empty values
         ctx_wnds = list(map(np.vstack, ctx_wnds))
-        idx_ctx_wnds = enumerate(ctx_wnds[:-1]) # last item not used to generate tuples
-        activities_wnd = map(lambda x: random_sublist(x, sub_wlen), ctx_wnds)
+        actv_wnds = map(lambda x: random_sublist(x, activity_wlen), ctx_wnds)
+
         # Coherency and training tuple generation ...... #
-        coherency_tuples = map(lambda v: coherency_generator(*v, ctx_wnds, min_inconsistency_dis), idx_ctx_wnds)
-        h_samples = zip(ctx_wnds, activities_wnd, status, coherency_tuples)
-        for ctx, activity, (coherency_ctx, coherency_label) in h_samples:
-            X.append({
-                "activity": activity, 
-                "context": ctx, 
-                "coherency_ctx": coherency_ctx, 
-                "context_normal_traffic": NORMAL_TRAFFIC if is_normal_context else ATTACK_TRAFFIC,
-                "coherency_label": coherency_label})
+        def coh_aus(ex):
+            idx, x = ex
+            return coherent_context_picker(x, idx, ctx_wnds, activity_wlen, min_inconsistency_dis) 
+        coherent_contexts = map(coh_aus, enumerate(ctx_wnds))
+        h_samples = zip(ctx_wnds, actv_wnds, coherent_contexts)
+        for ctx, activity, (coh_ctx, coh_label) in h_samples:
+            train_samples["activity"].append(activity[:, :-1])
+            train_samples["context"].append(ctx[:, :-1])
+            train_samples["coherency_label"].append(coh_label)
 
-    def choice_n_merge(x):
-        if x["coherency_ctx"] is None:
-            x["coherency_ctx"] = random.choice(X)["context"] 
-        merge = context_merge(x["context"], x["coherency_ctx"])
-        return (x["activity"], x["context"], merge, x["coherency_label"])
-    X = list(map(choice_n_merge, X))
+            coh_ctx = coh_ctx[:, :-1] if coh_ctx is not None else coh_ctx
+            train_samples["coherent_context"].append(coh_ctx)
 
-    return X
+            is_normal = np.all(ctx[:, -1] == "normal")
+            ctx_status = NORMAL_TRAFFIC if is_normal else ATTACK_TRAFFIC
+            train_samples["context_status"].append(ctx_status)
+
+    def to_coherent_activity(x):
+        if x is None:
+            x = random.choice(train_samples["context"])
+        return random_sublist(x, activity_wlen)
+    train_samples["coherent_activity"] = list(map(to_coherent_activity, train_samples["coherent_context"]))
+    del train_samples["coherent_context"]
+    train_samples = { k: torch.tensor(np.stack(v).astype(float), dtype=torch.float32) for k, v in train_samples.items() }
+
+    return train_samples
 
 
 # ----- ----- LOSSES ----- ----- #
@@ -112,10 +124,11 @@ class Contextual_Coherency():
     def __init__(self, alpha=.5):
         self.alpha = alpha
 
-    def __call__(self, x, _):
-        activity, context, merged_context, merge_label = x
-        context_loss = torch.norm(activity - context, 2)
-        coherency_loss = F.binary_cross_entropy(merged_context, merge_label)
+    def __call__(self,  model_output, coh_label):
+        import pdb; pdb.set_trace() 
+        e_actv, e_ctx, coherency_score = model_output
+        context_loss = torch.norm(e_actv - e_ctx, 2)
+        coherency_loss = F.binary_cross_entropy(coherency_score, merge_label)
         ctx_coh = (self.alpha * context_loss) + ((1 - self.alpha) * coherency_loss)
         return ctx_coh 
 
@@ -125,15 +138,22 @@ class Contextual_Coherency():
 class Ts2Vec(torch.nn.Module):
     def __init__(self):
         super(Ts2Vec, self).__init__()
-        self.embedding = torch.nn.Sequential(
-            torch.nn.Linear(10, 10),
-            torch.nn.LeakyReLU(),
-            torch.nn.Linear(10, 35),
-            torch.nn.Sigmoid()
-        )
+        self.embedder = nn.LSTM(37, 128, 3)
+        self.coherency = nn.Sequential(
+            nn.Linear(128, 2),
+            nn.Softmax())
+
+    def toembedding(self, x):
+        return self.embedder(x)[0][:, -1]
 
     def forward(self, x):
-        edb = self.embedding(x)
-        edb_norm = F.normalize(edb, p=2, dim=1)
-        coh_score = self.coherency(edb_norm)
-        return edb_norm, coh_score
+        activity = x[:, :28]
+        context = x[:, 28:60]
+        coherent_activity = x[:, 60:]
+
+        e_actv = self.toembedding(activity)
+        e_ctx = self.toembedding(context)
+        e_cohactv = self.toembedding(coherent_activity)
+        coh_score = self.coherency(e_actv + e_cohactv)
+        
+        return (e_actv, e_ctx, coh_score)

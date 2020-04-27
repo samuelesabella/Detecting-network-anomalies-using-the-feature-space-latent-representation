@@ -24,11 +24,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     df = pd.read_pickle(args.datasetpath)
+    df = df[(df.index.get_level_values("_time").day == 3) & (df.index.get_level_values("_time").hour < 12)]
     df = generator.preprocessing(df)
-    train, test = cb.data_split(model_samples, SEED)
-    model_train = cb.ts_windowing(train)
-    model_test = cb.ts_windowing(test)
-    
+    # train_groups, test_groups = cb.data_split(model_samples, SEED)
+    model_samples = cb.ts_windowing(df)
+    X_train = np.concatenate([model_samples["activity"], 
+                              model_samples["coherent_activity"], 
+                              model_samples["context"]], axis=1)
+    Y_train = model_samples["coherency_label"]
     
     net = NeuralNet(
         cb.Ts2Vec, 
@@ -40,4 +43,4 @@ if __name__ == "__main__":
         'max_epochs': [10, 20],
     }
     gs = GridSearchCV(net, params, refit=False, cv=5, scoring=["precision", "recall"])
-    gs_results = gs.fit(model_samples)
+    gs_results = gs.fit(X_train, Y_train)
