@@ -27,7 +27,6 @@ if __name__ == "__main__":
     df = df[(df.index.get_level_values("_time").day == 3) & (df.index.get_level_values("_time").hour < 12)]
     pr = cicids2017.Cicids2017Preprocessor()
     df = pr.preprocessing(df, update=True)
-    
     # train_groups, test_groups = cb.data_split(model_samples, SEED)
 
     model_samples = cb.ts_windowing(df)
