@@ -66,7 +66,7 @@ class Cicids2017Preprocessor(generator.Preprocessor):
         def to_dt(x):
             return pd.to_datetime(x, format='%Y-%m-%dT%H:%M:%S.%f')
         
-        df["status"] = "normal"
+        df["attack"] = "none"
         host_idxs = df.index.get_level_values("host")
         times_idxs = df.index.get_level_values("_time")
         
@@ -78,7 +78,7 @@ class Cicids2017Preprocessor(generator.Preprocessor):
             else:
                 host_selector = (host_idxs==host)
             time_selector = (times_idxs > dt_start) & (times_idxs < dt_stop)
-            df.loc[host_selector & time_selector, "status"] = f"{atype}__{adetail}"
+            df.loc[host_selector & time_selector, "attack"] = f"{atype}__{adetail}"
         return df
     
     def preprocessing(self, df, **kwargs):

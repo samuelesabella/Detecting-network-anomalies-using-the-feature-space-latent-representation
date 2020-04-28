@@ -2,16 +2,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import more_itertools as mit
+import math
 from scipy.stats import truncnorm
 from collections import defaultdict
+import logging
+import pandas as pd
 import random
 import numpy as np
+from tqdm import tqdm
 
 
-INCOHERENT = np.array([0, 1])
-COHERENT = np.array([1, 0])
-NORMAL_TRAFFIC = np.array([0, 1])
-ATTACK_TRAFFIC = np.array([1, 0])
+INCOHERENT = torch.tensor([0, 1])
+COHERENT = torch.tensor([1, 0])
+NORMAL_TRAFFIC = torch.tensor([0, 1])
+ATTACK_TRAFFIC = torch.tensor([1, 0])
 
 
 # ----- ----- DATA RESHAPING ----- ----- #
@@ -21,7 +25,7 @@ def data_split(df, seed):
         train_groups: list containing continuous samples without attack
         test_groups: list containing continuous times samples also with attacks
     """
-    normal_traffic = df[df["status"] == "normal"]
+    normal_traffic = df[df["attack"] == "none"]
     random.Random(seed).shuffle(l)
     train_index = int(len(l) * .80)
     return l[:train_index], l[train_index:]
@@ -67,55 +71,72 @@ def coherent_context_picker(current_ctx, ctx_idx, context_windows, step_coherenc
 
 def random_sublist(l, sub_wlen):
     r = int((len(l) - sub_wlen) * zero_one_normal())
-    return l[r:r+sub_wlen]
+    return l.iloc[r:r+sub_wlen]
 
 
-def ts_windowing(df, w_minutes=15, sub_w_minutes=7):
-    if df.columns[-1] != "status":
-        raise ValueError("Wrong dataframe format")
-
-    train_samples = defaultdict(list)
+def ts_windowing(df, w_minutes=15, sub_w_minutes=7, overlapping=.9):
+    samples = defaultdict(list)
     # Context window length
     context_wlen = int(w_minutes * 4) # Samples per minutes (one sample every 15 seconds)
     # Activity window length
     activity_wlen = int(sub_w_minutes * 4)
     # 1 hour distance to have inconsistent context (4 samples per minutes)
-    min_inconsistency_dis = 4 * 60
+    stepsize = max(int(context_wlen * (1 - overlapping)), 1) 
+    min_inconsistency_dis = math.ceil(4 * 60 / stepsize)
 
-    for _, ts in df.groupby(level=['device_category', 'host']):
+    logging.debug("Windowing time series for each host")
+    host_ts = df.groupby(level=['device_category', 'host'])
+    for _, ts in tqdm(host_ts):
         # Building context/activity windows ..... #
-        ctx_wnds = mit.windowed(ts.values, context_wlen, step=1)
-        # Windowing operation fills empty values
-        ctx_wnds = list(map(np.vstack, ctx_wnds))
-        actv_wnds = map(lambda x: random_sublist(x, activity_wlen), ctx_wnds)
+        ctx_wnds = mit.windowed(range(len(ts)), context_wlen, step=stepsize)
+        ctx_wnds = list(filter(lambda x: None not in x, ctx_wnds))
+        ctx_wnds_values = map(lambda x: ts.iloc[list(x)], ctx_wnds)
+        ctx_wnds_values = list(ctx_wnds_values)
+        actv_wnds = map(lambda x: random_sublist(x, activity_wlen), ctx_wnds_values)
 
         # Coherency and training tuple generation ...... #
         def coh_aus(ex):
             idx, x = ex
-            return coherent_context_picker(x, idx, ctx_wnds, activity_wlen, min_inconsistency_dis) 
-        coherent_contexts = map(coh_aus, enumerate(ctx_wnds))
-        h_samples = zip(ctx_wnds, actv_wnds, coherent_contexts)
+            return coherent_context_picker(x, idx, ctx_wnds_values, activity_wlen, min_inconsistency_dis) 
+        coherent_contexts = map(coh_aus, enumerate(ctx_wnds_values))
+        h_samples = zip(ctx_wnds_values, actv_wnds, coherent_contexts)
         for ctx, activity, (coh_ctx, coh_label) in h_samples:
-            train_samples["activity"].append(activity[:, :-1])
-            train_samples["context"].append(ctx[:, :-1])
-            train_samples["coherency_label"].append(coh_label)
+            samples["activity"].append(activity)#.drop("attack", axis=1))
+            samples["context"].append(ctx)#.drop("attack", axis=1))
+            samples["coherency_context"].append(coh_ctx)#.drop("attack", axis=1) if coh_ctx is not None else None)
 
-            coh_ctx = coh_ctx[:, :-1] if coh_ctx is not None else coh_ctx
-            train_samples["coherent_context"].append(coh_ctx)
-
-            is_normal = np.all(ctx[:, -1] == "normal")
-            ctx_status = NORMAL_TRAFFIC if is_normal else ATTACK_TRAFFIC
-            train_samples["context_status"].append(ctx_status)
-
-    def to_coherent_activity(x):
+            samples["coherency_label"].append(coh_label)
+            ctx_attack = NORMAL_TRAFFIC if (ctx["attack"]=="none").all() else ATTACK_TRAFFIC
+            samples["attack"].append(ctx_attack)
+            
+    logging.debug("Generating coherent activities")
+    def coh_ctx_to_activity(x):
         if x is None:
-            x = random.choice(train_samples["context"])
+            x = random.choice(samples["context"])
         return random_sublist(x, activity_wlen)
-    train_samples["coherent_activity"] = list(map(to_coherent_activity, train_samples["coherent_context"]))
-    del train_samples["coherent_context"]
-    train_samples = { k: torch.tensor(np.stack(v).astype(float), dtype=torch.float32) for k, v in train_samples.items() }
+    samples["coherency_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["coherency_context"])))
+    del samples["coherency_context"]
+    
+    logging.debug("Merging dataframes")
+    samples_len = len(samples["context"])
+    context_samples = pd.concat(samples["context"], keys=range(samples_len))
+    del samples["context"]
+    activity_samples = pd.concat(samples["activity"], keys=range(samples_len))
+    del samples["activity"]
+    coherency_activity_samples = pd.concat(samples["coherency_activity"], keys=range(samples_len))
+    del samples["coherency_activity"]
 
-    return train_samples
+    samples["X"] = pd.concat(
+        [activity_samples, context_samples, coherency_activity_samples], 
+        keys=["activity", "context", "coherency_activity"])
+    samples["X"].reset_index(level=["host", "_time", "device_category"], inplace=True)
+    samples["X"] = samples["X"].swaplevel(0, 1)
+
+    return samples
+
+
+def windows2tensor(dct):
+    import pdb; pdb.set_trace() 
 
 
 # ----- ----- LOSSES ----- ----- #

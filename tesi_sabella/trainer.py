@@ -3,12 +3,14 @@ import pandas as pd
 import argparse
 import random
 import numpy as np
-import more_itertools as mit
 from skorch.net import NeuralNet
 from sklearn.model_selection import GridSearchCV
 
 import model_codebase as cb
 import cicids2017_data_generator as cicids2017
+
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 
 # Reproducibility .... #
@@ -24,9 +26,21 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     df = pd.read_pickle(args.datasetpath)
-    df = df[(df.index.get_level_values("_time").day == 3) & (df.index.get_level_values("_time").hour < 12)]
     pr = cicids2017.Cicids2017Preprocessor()
-    df = pr.preprocessing(df, update=True)
+    
+    df_train = df[df.index.get_level_values("_time").day == 3]
+    df_train = pr.preprocessing(df_train, update=True)
+    train_set = cb.ts_windowing(df_train, overlapping=.8)
+    train_tensors = cb.windows2tensor(train_set)
+
+    for d in [4, 5, 6, 7]:
+        df_day = df[df.index.get_level_values("_time").day == d]
+        df_day_preproc = pr.preprocessing(df_day)
+        test_day = cb.ts_windowing(df_day_preproc)
+        
+        attacks_samples = (test_day["attack"]==cb.ATTACK_TRAFFIC).all(axis=1)
+        normal_samples = (test_day["attack"]==cb.NORMAL_TRAFFIC).all(axis=1)
+        import pdb; pdb.set_trace() 
     # train_groups, test_groups = cb.data_split(model_samples, SEED)
 
     model_samples = cb.ts_windowing(df)
