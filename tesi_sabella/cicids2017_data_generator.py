@@ -60,37 +60,38 @@ ATTACKS = [
 ]
 
 
-def label(df):                                          
-    def to_dt(x):
-        return pd.to_datetime(x, format='%Y-%m-%dT%H:%M:%S.%f')
+class Cicids2017Preprocessor(generator.Preprocessor):
+    @staticmethod
+    def label(df):                                          
+        def to_dt(x):
+            return pd.to_datetime(x, format='%Y-%m-%dT%H:%M:%S.%f')
+        
+        df["status"] = "normal"
+        host_idxs = df.index.get_level_values("host")
+        times_idxs = df.index.get_level_values("_time")
+        
+        for atype, adetail, start, stop, host in ATTACKS:
+            dt_start = to_dt(start)
+            dt_stop = to_dt(stop)
+            if host == "*":
+                host_selector = True
+            else:
+                host_selector = (host_idxs==host)
+            time_selector = (times_idxs > dt_start) & (times_idxs < dt_stop)
+            df.loc[host_selector & time_selector, "status"] = f"{atype}__{adetail}"
+        return df
     
-    df["status"] = "normal"
-    host_idxs = df.index.get_level_values("host")
-    times_idxs = df.index.get_level_values("_time")
+    def preprocessing(self, df, **kwargs):
+        # Filtering hosts ..... #
+        df = df[df.index.get_level_values('host').str.contains("192.168.10.")]
+        # Passing the ball ..... #
+        preproc_df = super().preprocessing(df, **kwargs)
+        # Removing initial non zero traffic ..... #
+        index_hours = preproc_df.index.get_level_values("_time").hour
+        working_hours = (index_hours > 8) & (index_hours < 17)
+        preproc_df = preproc_df[working_hours]
     
-    for atype, adetail, start, stop, host in ATTACKS:
-        dt_start = to_dt(start)
-        dt_stop = to_dt(stop)
-        if host == "*":
-            host_selector = True
-        else:
-            host_selector = (host_idxs==host)
-        time_selector = (times_idxs > dt_start) & (times_idxs < dt_stop)
-        df.loc[host_selector & time_selector, "status"] = f"{atype}__{adetail}"
-    return df
-
-
-def preprocessing(df):
-    # Filtering hosts ..... #
-    df = df[df.index.get_level_values('host').str.contains("192.168.10.")]
-    # Passing the ball ..... #
-    preproc_df = generator.preprocessing(df)
-    # Removing initial non zero traffic ..... #
-    index_hours = preproc_df.index.get_level_values("_time").hour
-    working_hours = (index_hours > 8) & (index_hours < 17)
-    preproc_df = preproc_df[working_hours]
-
-    return label(preproc_df)
+        return Cicids2017Preprocessor.label(preproc_df)
 
 
 # ----- ----- CICIDS2017 ----- ----- #

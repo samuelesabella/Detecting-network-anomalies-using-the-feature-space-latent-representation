@@ -8,7 +8,7 @@ from skorch.net import NeuralNet
 from sklearn.model_selection import GridSearchCV
 
 import model_codebase as cb
-import cicids2017_data_generator as generator
+import cicids2017_data_generator as cicids2017
 
 
 # Reproducibility .... #
@@ -25,8 +25,11 @@ if __name__ == "__main__":
     
     df = pd.read_pickle(args.datasetpath)
     df = df[(df.index.get_level_values("_time").day == 3) & (df.index.get_level_values("_time").hour < 12)]
-    df = generator.preprocessing(df)
+    pr = cicids2017.Cicids2017Preprocessor()
+    df = pr.preprocessing(df, update=True)
+    
     # train_groups, test_groups = cb.data_split(model_samples, SEED)
+
     model_samples = cb.ts_windowing(df)
     X_train = np.concatenate([model_samples["activity"], 
                               model_samples["coherent_activity"], 

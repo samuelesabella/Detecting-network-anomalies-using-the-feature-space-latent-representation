@@ -29,61 +29,69 @@ hour2ts = [(MORNING,   range(6,  12)),
            (NIGHT,     range(22, 6))]
 hour2ts = { h: t for t, hrange in hour2ts for h in hrange }
 
-kbins = KBinsDiscretizer(n_bins=7, encode="ordinal", strategy="quantile")
+class Preprocessor():
+    def __init__(self):
+        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=7, encode="ordinal", strategy="quantile"))
+        # self.kbins = KBinsDiscretizer(n_bins=7, encode="ordinal", strategy="quantile")
 
-def date_as_feature(df):
-    time_indx = df.index.get_level_values("_time")
-
-    weekend_map = defaultdict(lambda: 0, { 5: 1, 6: 1 })
-    df["is_weekend"] = time_indx.dayofweek.map(weekend_map)
+    @staticmethod
+    def date_as_feature(df):
+        time_indx = df.index.get_level_values("_time")
     
-    mapped_hours = time_indx.hour.map(hour2ts).values.tolist() 
-    hours_df = pd.DataFrame(mapped_hours, columns=["morning", "afternoon", "evening", "night"], index=df.index)
-    df = pd.concat([df, hours_df], axis=1)
-    return df
-
-def fill_zero_traffic(df):
-    """Replace zero traffic holes with rolling window mean
-    """
-    traffic = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
-    missing_traffic = (df[traffic] == 0).all(axis=1)
-    df[missing_traffic].replace(0, np.NaN)
-    r_mean = df[traffic].rolling(min_periods=2, window=3, center=True).sum() / 2
-    df.loc[missing_traffic, traffic] = r_mean[missing_traffic]
-    return df
-
-def preprocessing(df):
-    df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
-    df = fill_zero_traffic(df)
-
-    # DPI unit length normalization ..... #
-    ndpi_num_flows_c = [c for c in df.columns if "ndpi_flows:num_flows" in c]
-    ndpi = df[ndpi_num_flows_c]
-    ndpi_sum = ndpi.sum(axis=1)
-    df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum, axis=0)        
-
-    # Non decreasing delta discretization ..... #
-    non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
-    df[non_decreasing] = df[non_decreasing].diff()
-    df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
-
-    # Feature discretization ..... #
-    # Note: it was avoided using pandas qcut/cut due to the decoupling between fit and transform 
-    #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
-    #       with weekly data and used multiple times while the model is running
-    def discretize_ts(x):
-        v = x.values.reshape(-1, 1)
-        vd = kbins.fit_transform(v).reshape(-1)
-        return vd
-    non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
-    groups = df[non_dpi].groupby(level=["device_category", "host"], group_keys=False)
-    # Discretize individually each column of each host
-    df[non_dpi] = groups.apply(lambda host_ts: host_ts.apply(discretize_ts))
-
-    # Date/hour as a feature ..... #
-    df = date_as_feature(df)
+        weekend_map = defaultdict(lambda: 0, { 5: 1, 6: 1 })
+        df["is_weekend"] = time_indx.dayofweek.map(weekend_map)
+        
+        mapped_hours = time_indx.hour.map(hour2ts).values.tolist() 
+        hours_df = pd.DataFrame(mapped_hours, columns=["morning", "afternoon", "evening", "night"], index=df.index)
+        df = pd.concat([df, hours_df], axis=1)
+        return df
     
-    return df
+    @staticmethod
+    def fill_zero_traffic(df):
+        """Replace zero traffic holes with rolling window mean
+        """
+        traffic = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
+        missing_traffic = (df[traffic] == 0).all(axis=1)
+        df[missing_traffic].replace(0, np.NaN)
+        r_mean = df[traffic].rolling(min_periods=2, window=3, center=True).sum() / 2
+        df.loc[missing_traffic, traffic] = r_mean[missing_traffic]
+        return df
+    
+    def preprocessing(self, df, update=False):
+        df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
+        df = Preprocessor.fill_zero_traffic(df)
+    
+        # DPI unit length normalization ..... #
+        ndpi_num_flows_c = [c for c in df.columns if "ndpi_flows:num_flows" in c]
+        ndpi = df[ndpi_num_flows_c]
+        ndpi_sum = ndpi.sum(axis=1)
+        df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum, axis=0)        
+    
+        # Non decreasing delta discretization ..... #
+        non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
+        df[non_decreasing] = df[non_decreasing].diff()
+        df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
+    
+        # Feature discretization ..... #
+        # Note: it was avoided using pandas qcut/cut due to the decoupling between fit and transform 
+        #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
+        #       with weekly data and used multiple times while the model is running
+        def discretize_ts(x):
+            v = x.values.reshape(-1, 1)
+            kbins = self.column_kbins[x.name]
+            if update:
+                kbins.fit(v)
+            vd = kbins.transform(v).reshape(-1)
+            return vd
+        non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
+        groups = df[non_dpi].groupby(level=["device_category", "host"], group_keys=False)
+        # Discretize individually each column of each host
+        df[non_dpi] = groups.apply(lambda host_ts: host_ts.apply(discretize_ts))
+    
+        # Date/hour as a feature ..... #
+        df = Preprocessor.date_as_feature(df)
+        
+        return df
 
 
 

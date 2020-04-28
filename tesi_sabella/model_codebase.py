@@ -135,6 +135,30 @@ class Contextual_Coherency():
 
 # ----- ----- MODEL ----- ----- #
 # ----- ----- ----- ----- ----- #
+class ConvTs2Vec(torch.nn.Module):
+    def __init__(self):
+        super(Ts2Vec, self).__init__()
+        self.embedder = nn.LSTM(37, 128, 3)
+        self.coherency = nn.Sequential(
+            nn.Linear(128, 2),
+            nn.Softmax())
+
+    def toembedding(self, x):
+        return self.embedder(x)[0][:, -1]
+
+    def forward(self, x):
+        activity = x[:, :28]
+        context = x[:, 28:60]
+        coherent_activity = x[:, 60:]
+
+        e_actv = self.toembedding(activity)
+        e_ctx = self.toembedding(context)
+        e_cohactv = self.toembedding(coherent_activity)
+        coh_score = self.coherency(e_actv + e_cohactv)
+        
+        return (e_actv, e_ctx, coh_score)
+
+
 class Ts2Vec(torch.nn.Module):
     def __init__(self):
         super(Ts2Vec, self).__init__()
