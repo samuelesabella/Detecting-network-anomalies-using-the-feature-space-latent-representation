@@ -101,29 +101,32 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7, overlapping=.9):
         coherent_contexts = map(coh_aus, enumerate(ctx_wnds_values))
         h_samples = zip(ctx_wnds_values, actv_wnds, coherent_contexts)
         for ctx, activity, (coh_ctx, coh_label) in h_samples:
-            samples["activity"].append(activity)#.drop("attack", axis=1))
-            samples["context"].append(ctx)#.drop("attack", axis=1))
-            samples["coherency_context"].append(coh_ctx)#.drop("attack", axis=1) if coh_ctx is not None else None)
+            samples["activity"].append(activity)
+            samples["context"].append(ctx)
+            samples["coherency_context"].append(coh_ctx)
 
             samples["coherency_label"].append(coh_label)
-            ctx_attack = NORMAL_TRAFFIC if (ctx["attack"]=="none").all() else ATTACK_TRAFFIC
-            samples["attack"].append(ctx_attack)
+            if "attack" in ctx:
+                ctx_attack = NORMAL_TRAFFIC if (ctx["attack"]=="none").all() else ATTACK_TRAFFIC
+                samples["attack"].append(ctx_attack)
             
-    logging.debug("Generating coherent activities")
+    # Picking random coherency contexts ..... #
     def coh_ctx_to_activity(x):
         if x is None:
             x = random.choice(samples["context"])
         return random_sublist(x, activity_wlen)
+    logging.debug("Generating coherent activities")
     samples["coherency_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["coherency_context"])))
     del samples["coherency_context"]
     
+    # Merging data frames ..... #
     logging.debug("Merging dataframes")
     samples_len = len(samples["context"])
-    context_samples = pd.concat(samples["context"], keys=range(samples_len))
+    context_samples = pd.concat(samples["context"], keys=range(samples_len), names=["sample_idx"])
     del samples["context"]
-    activity_samples = pd.concat(samples["activity"], keys=range(samples_len))
+    activity_samples = pd.concat(samples["activity"], keys=range(samples_len), names=["sample_idx"])
     del samples["activity"]
-    coherency_activity_samples = pd.concat(samples["coherency_activity"], keys=range(samples_len))
+    coherency_activity_samples = pd.concat(samples["coherency_activity"], keys=range(samples_len), names=["sample_idx"])
     del samples["coherency_activity"]
 
     samples["X"] = pd.concat(
@@ -132,11 +135,18 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7, overlapping=.9):
     samples["X"].reset_index(level=["host", "_time", "device_category"], inplace=True)
     samples["X"] = samples["X"].swaplevel(0, 1)
 
+    # Concatenating labels ..... #
+    if "attack" in samples:
+        samples["attack"] = torch.stack(samples["attack"])
+    samples["coherency_label"] = torch.stack(samples["coherency_label"])
+
     return samples
 
 
-def windows2tensor(dct):
-    import pdb; pdb.set_trace() 
+def X2tensor(X):
+    clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
+    ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
+    return torch.tensor(ts_values)
 
 
 # ----- ----- LOSSES ----- ----- #
@@ -192,6 +202,7 @@ class Ts2Vec(torch.nn.Module):
         return self.embedder(x)[0][:, -1]
 
     def forward(self, x):
+        import pdb; pdb.set_trace() 
         activity = x[:, :28]
         context = x[:, 28:60]
         coherent_activity = x[:, 60:]

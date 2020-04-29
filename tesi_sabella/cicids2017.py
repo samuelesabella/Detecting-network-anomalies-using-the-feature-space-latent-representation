@@ -1,6 +1,15 @@
-import pandas as pd
 from collections import defaultdict
+from sklearn.model_selection import GridSearchCV
+from skorch.net import NeuralNet
+import argparse
 import data_generator as generator
+import logging
+import model_codebase as cb
+import numpy as np
+import pandas as pd
+import random
+import torch
+logging.basicConfig(level=logging.DEBUG)
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -94,8 +103,8 @@ class Cicids2017Preprocessor(generator.Preprocessor):
         return Cicids2017Preprocessor.label(preproc_df)
 
 
-# ----- ----- CICIDS2017 ----- ----- #
-# ----- ----- ---------- ----- ----- #
+# ----- ----- DATA GENERATOR ----- ----- #
+# ----- ----- -------------- ----- ----- #
 CICIDS2017_IPV4_NETMAP = defaultdict(lambda : "unknown device class", {
     "192.168.10.3": "server",
     "192.168.10.50": "server",
@@ -122,3 +131,76 @@ class CICIDS2017(generator.FluxDataGenerator):
 
     def category_map(self, new_samples):
         return new_samples['host'].map(CICIDS2017_IPV4_NETMAP)
+
+
+# ----- ----- EXPERIMENTS ----- ----- #
+# ----- ----- ----------- ----- ----- #
+
+# Reproducibility .... #
+SEED = 117697 
+random.seed(SEED)
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+
+
+def prepare_dataset(df):
+    pr = Cicids2017Preprocessor()
+    
+    df_train = df[df.index.get_level_values("_time").day == 3]
+    df_train = pr.preprocessing(df_train, update=True)
+    train_set = cb.ts_windowing(df_train, overlapping=.8)
+
+    test_set = defaultdict(list)
+    g_sample_idx = 0
+    for d in [4, 5]: #, 6, 7]:
+        df_day = df[df.index.get_level_values("_time").day == d]
+        df_day_preproc = pr.preprocessing(df_day)
+        test_day = cb.ts_windowing(df_day_preproc)
+        
+        attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].numpy()
+        normal_rows = torch.where(test_day["attack"] == cb.NORMAL_TRAFFIC)[0].numpy()
+        normal_rows = np.random.choice(normal_rows, len(attacks_rows), replace=False)
+
+        sampled_rows = np.concatenate([normal_rows, attacks_rows])
+        sample_df = test_day["X"].loc[sampled_rows]
+        sample_coh_label = test_day["coherency_label"][sampled_rows]
+        sample_attack_label = test_day["attack"][sampled_rows]
+
+        test_set["X"].append(sample_df)
+        test_set["coherency_label"].append(sample_coh_label)
+        test_set["attack"].append(sample_attack_label)
+    
+    # Resetting sample indexes for test set
+    test_samples = []
+    for day_df in test_set["X"]:
+        samples = day_df.groupby(level="sample_idx", sort=False)
+        test_samples.extend([sg[1].reset_index(level="sample_idx") for sg in samples])
+    test_set_len = len(test_samples)
+    test_set["X"] = pd.concat(test_samples, keys=range(test_set_len), names=["sample_idx"])
+    # concatenating labels 
+    test_set["coherency_label"] = torch.cat(test_set["coherency_label"])
+    test_set["attack"] = torch.cat(test_set["attack"])
+
+    return train_set, test_set
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="mEmbedding training")
+    parser.add_argument("--datasetpath", "-d", help="Dataset path")
+    args = parser.parse_args()
+    
+    df = pd.read_pickle(args.datasetpath)
+    train_set, test_set = prepare_dataset(df) 
+    X_train, Y_train = [cb.X2tensor(train_set["X"]), train_set["coherency_label"]]
+
+    net = NeuralNet(
+        cb.Ts2Vec, 
+        cb.Contextual_Coherency,
+        optimizer=torch.optim.Adam)
+    
+    params = {
+        'lr': [0.01, 0.02],
+        'max_epochs': [10, 20],
+    }
+    gs = GridSearchCV(net, params, refit=False, cv=5, scoring=["precision", "recall"])
+    gs_results = gs.fit(X_train, Y_train)
