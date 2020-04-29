@@ -1,5 +1,6 @@
 import torch
 import pandas as pd
+from collections import defaultdict
 import argparse
 import random
 import numpy as np
@@ -33,14 +34,25 @@ if __name__ == "__main__":
     train_set = cb.ts_windowing(df_train, overlapping=.8)
     train_tensors = cb.windows2tensor(train_set)
 
+    test_set = defaultdict(list)
     for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day)
         test_day = cb.ts_windowing(df_day_preproc)
         
-        attacks_samples = (test_day["attack"]==cb.ATTACK_TRAFFIC).all(axis=1)
-        normal_samples = (test_day["attack"]==cb.NORMAL_TRAFFIC).all(axis=1)
-        import pdb; pdb.set_trace() 
+        attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].numpy()
+        normal_rows = torch.where(test_day["attack"] == cb.NORMAL_TRAFFIC)[0].numpy()
+        normal_rows = np.random.choice(normal_rows, len(attacks_rows), replace=False)
+
+        sampled_rows = np.concatenate([normal_rows, attacks_rows])
+        sample_df = test_day["X"].loc[sampled_rows]
+        sample_coh_label = test_day["coherency_label"][sampled_rows]
+        sample_attack_label = test_day["attack"][sampled_rows]
+
+        test_set["X"].append(sample_df)
+        test_set["coherency_label"].append(sample_coh_label)
+        test_set["attack"].append(sample_attack_label)
+
     # train_groups, test_groups = cb.data_split(model_samples, SEED)
 
     model_samples = cb.ts_windowing(df)

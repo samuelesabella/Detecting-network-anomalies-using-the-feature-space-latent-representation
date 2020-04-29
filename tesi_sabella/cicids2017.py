@@ -1,12 +1,17 @@
 from collections import defaultdict
+from sklearn.model_selection import ParameterGrid
+from pathlib import Path
 from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import KFold
 from skorch.net import NeuralNet
 import argparse
 import data_generator as generator
 import logging
 import model_codebase as cb
 import numpy as np
+import os
 import pandas as pd
+import pickle
 import random
 import torch
 logging.basicConfig(level=logging.DEBUG)
@@ -149,6 +154,7 @@ def prepare_dataset(df):
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
     train_set = cb.ts_windowing(df_train, overlapping=.8)
+    return train_set, None
 
     test_set = defaultdict(list)
     g_sample_idx = 0
@@ -177,6 +183,8 @@ def prepare_dataset(df):
         test_samples.extend([sg[1].reset_index(level="sample_idx") for sg in samples])
     test_set_len = len(test_samples)
     test_set["X"] = pd.concat(test_samples, keys=range(test_set_len), names=["sample_idx"])
+    test_set["X"].drop(columns=["sample_idx"], inplace=True)
+    
     # concatenating labels 
     test_set["coherency_label"] = torch.cat(test_set["coherency_label"])
     test_set["attack"] = torch.cat(test_set["attack"])
@@ -184,23 +192,75 @@ def prepare_dataset(df):
     return train_set, test_set
 
 
+def store_dataset(dataset, path):
+    path.mkdir(parents=True, exist_ok=True)
+    for k, v in dataset.items():
+        if torch.is_tensor(v):
+            torch.save(v, path / f"{k}.torch.pkl")
+        elif isinstance(v, pd.DataFrame):
+            pd.to_pickle(v, path / f"{k}.pandas.pkl") 
+
+
+def load_dataset(path):
+    dataset = {}
+    for f in os.listdir(path):
+        fpath = path / f
+        key = f.split(".")[0]
+        if "torch" in f:
+            dataset[key] = torch.load(fpath)
+        elif "pandas" in f:
+            dataset[key] = pd.read_pickle(fpath)
+    return dataset
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="mEmbedding training")
-    parser.add_argument("--datasetpath", "-d", help="Dataset path")
+    parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
+    # parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
     args = parser.parse_args()
-    
-    df = pd.read_pickle(args.datasetpath)
-    train_set, test_set = prepare_dataset(df) 
-    X_train, Y_train = [cb.X2tensor(train_set["X"]), train_set["coherency_label"]]
 
+    # Data preprocessing ..... #
+    df = pd.read_pickle(args.timeseries)
+    train_set, test_set = prepare_dataset(df)# if not args.dataset: 
+
+    # df = pd.read_pickle(args.timeseries)
+    #     train_set, test_set = prepare_dataset(df)
+    #     store_dataset(train_set, args.timeseries.parent / "train") 
+    #     store_dataset(test_set, args.timeseries.parent / "test")
+    # else:
+    #     train_set = load_dataset(args.dataset / "train")
+    #     test_set = load_dataset(args.dataset / "test")
+    # import pdb; pdb.set_trace() 
+    
+    X_train = cb.X2split_tensors(train_set["X"])
+    Y_train = { k: train_set[k] for k in ["coherency_label", "attack"] }
+
+    # Grid hyperparams ..... #
+    kf = KFold(n_splits=5)
     net = NeuralNet(
         cb.Ts2Vec, 
         cb.Contextual_Coherency,
-        optimizer=torch.optim.Adam)
-    
-    params = {
+        optimizer=torch.optim.Adam)    
+    grid_params = ParameterGrid({
         'lr': [0.01, 0.02],
         'max_epochs': [10, 20],
-    }
-    gs = GridSearchCV(net, params, refit=False, cv=5, scoring=["precision", "recall"])
-    gs_results = gs.fit(X_train, Y_train)
+    })
+
+    # Grid search ..... #
+    for params in grid_params:  
+        # Parameter initialization
+        for k, v in params.items():
+            setattr(net, k, v)
+        
+        # Kfold fitting 
+        for train_index, vl_index in kf.split(Y_train["coherency_label"]):
+            X_cv_train = { k: v[train_index, :] for k, v in X_train.items() }
+            Y_cv_train = { k: v[train_index, :] for k, v in Y_train.items() }
+
+            X_cv_vl = { k: v[vl_index, :] for k, v in X_train.items() }
+            Y_cv_vl = { k: v[vl_index, :] for k, v in Y_train.items() }
+            
+            gs_results = net.fit(X_cv_train, Y_cv_train["coherency_label"])
+
+
+

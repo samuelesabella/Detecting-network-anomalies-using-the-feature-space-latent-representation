@@ -12,10 +12,10 @@ import numpy as np
 from tqdm import tqdm
 
 
-INCOHERENT = torch.tensor([0, 1])
-COHERENT = torch.tensor([1, 0])
-NORMAL_TRAFFIC = torch.tensor([0, 1])
-ATTACK_TRAFFIC = torch.tensor([1, 0])
+INCOHERENT = torch.tensor([0., 1.], dtype=torch.float32)
+COHERENT = torch.tensor([1., 0.], dtype=torch.float32)
+NORMAL_TRAFFIC = torch.tensor([0., 1.], dtype=torch.float32)
+ATTACK_TRAFFIC = torch.tensor([1., 0.], dtype=torch.float32)
 
 
 # ----- ----- DATA RESHAPING ----- ----- #
@@ -74,7 +74,7 @@ def random_sublist(l, sub_wlen):
     return l.iloc[r:r+sub_wlen]
 
 
-def ts_windowing(df, w_minutes=15, sub_w_minutes=7, overlapping=.9):
+def ts_windowing(df, w_minutes=14, sub_w_minutes=7, overlapping=.9):
     samples = defaultdict(list)
     # Context window length
     context_wlen = int(w_minutes * 4) # Samples per minutes (one sample every 15 seconds)
@@ -89,7 +89,7 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7, overlapping=.9):
     for _, ts in tqdm(host_ts):
         # Building context/activity windows ..... #
         ctx_wnds = mit.windowed(range(len(ts)), context_wlen, step=stepsize)
-        ctx_wnds = list(filter(lambda x: None not in x, ctx_wnds))
+        ctx_wnds = filter(lambda x: None not in x, ctx_wnds)
         ctx_wnds_values = map(lambda x: ts.iloc[list(x)], ctx_wnds)
         ctx_wnds_values = list(ctx_wnds_values)
         actv_wnds = map(lambda x: random_sublist(x, activity_wlen), ctx_wnds_values)
@@ -131,7 +131,7 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7, overlapping=.9):
 
     samples["X"] = pd.concat(
         [activity_samples, context_samples, coherency_activity_samples], 
-        keys=["activity", "context", "coherency_activity"])
+        keys=["activity", "context", "coherency_activity"], names=["model_input"])
     samples["X"].reset_index(level=["host", "_time", "device_category"], inplace=True)
     samples["X"] = samples["X"].swaplevel(0, 1)
 
@@ -143,14 +143,18 @@ def ts_windowing(df, w_minutes=15, sub_w_minutes=7, overlapping=.9):
     return samples
 
 
+def X2split_tensors(X):
+    return { x[0]: X2tensor(x[1]) for x in X.groupby(level=1) }
+
 def X2tensor(X):
     clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
     ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
-    return torch.tensor(ts_values)
+    return torch.tensor(ts_values).float()
 
 
-# ----- ----- LOSSES ----- ----- #
-# ----- ----- ------ ----- ----- #
+
+# ----- ----- LOSSES/SCORING ----- ----- #
+# ----- ----- -------------- ----- ----- #
 class Contextual_Coherency():
     def __init__(self, alpha=.5):
         self.alpha = alpha
@@ -159,37 +163,13 @@ class Contextual_Coherency():
         import pdb; pdb.set_trace() 
         e_actv, e_ctx, coherency_score = model_output
         context_loss = torch.norm(e_actv - e_ctx, 2)
-        coherency_loss = F.binary_cross_entropy(coherency_score, merge_label)
+        coherency_loss = F.binary_cross_entropy(coherency_score, coh_label)
         ctx_coh = (self.alpha * context_loss) + ((1 - self.alpha) * coherency_loss)
         return ctx_coh 
 
 
 # ----- ----- MODEL ----- ----- #
 # ----- ----- ----- ----- ----- #
-class ConvTs2Vec(torch.nn.Module):
-    def __init__(self):
-        super(Ts2Vec, self).__init__()
-        self.embedder = nn.LSTM(37, 128, 3)
-        self.coherency = nn.Sequential(
-            nn.Linear(128, 2),
-            nn.Softmax())
-
-    def toembedding(self, x):
-        return self.embedder(x)[0][:, -1]
-
-    def forward(self, x):
-        activity = x[:, :28]
-        context = x[:, 28:60]
-        coherent_activity = x[:, 60:]
-
-        e_actv = self.toembedding(activity)
-        e_ctx = self.toembedding(context)
-        e_cohactv = self.toembedding(coherent_activity)
-        coh_score = self.coherency(e_actv + e_cohactv)
-        
-        return (e_actv, e_ctx, coh_score)
-
-
 class Ts2Vec(torch.nn.Module):
     def __init__(self):
         super(Ts2Vec, self).__init__()
@@ -198,18 +178,19 @@ class Ts2Vec(torch.nn.Module):
             nn.Linear(128, 2),
             nn.Softmax())
 
+    def to2Dembedding(self, df):
+        pass
+    
+    def anomalyScore(self, e_a1, e_a2):
+        return self.coherency((e_a1 + e_a2) / 2)
+
     def toembedding(self, x):
         return self.embedder(x)[0][:, -1]
 
-    def forward(self, x):
-        import pdb; pdb.set_trace() 
-        activity = x[:, :28]
-        context = x[:, 28:60]
-        coherent_activity = x[:, 60:]
-
+    def forward(self, activity=None, context=None, coherency_activity=None):
         e_actv = self.toembedding(activity)
-        e_ctx = self.toembedding(context)
-        e_cohactv = self.toembedding(coherent_activity)
+        e_ctx = self.toembedding(context.detach())
+        e_cohactv = self.toembedding(coherency_activity.detach())
         coh_score = self.coherency(e_actv + e_cohactv)
         
         return (e_actv, e_ctx, coh_score)
