@@ -60,14 +60,14 @@ class Preprocessor():
     
     def preprocessing(self, df, update=True):
         df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
-        df = df.fillna(0)
         df = Preprocessor.fill_zero_traffic(df)
+        df = df.fillna(0)
     
         # DPI unit length normalization ..... #
         ndpi_num_flows_c = [c for c in df.columns if "ndpi_flows:num_flows" in c]
         ndpi = df[ndpi_num_flows_c]
         ndpi_sum = ndpi.sum(axis=1)
-        df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum, axis=0)        
+        df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum + 1e-7, axis=0)        
     
         # Non decreasing delta discretization ..... #
         if self.compute_deltas:
