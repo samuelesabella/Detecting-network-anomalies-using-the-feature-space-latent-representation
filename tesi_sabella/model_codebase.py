@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from sklearn.manifold import TSNE
 import torch.nn.functional as F
 import more_itertools as mit
 import math
@@ -193,6 +194,39 @@ class Ts2Vec(torch.nn.Module):
 
     def toembedding(self, x):
         return self.embedder(x)[0][:, -1]
+
+    def to2Dmap(self, df, wlen_minutes=7):
+        wlen = wlen_minutes * 4
+        res_map = pd.DataFrame()
+        for (dev_cat, host), ts in df.groupby(level=["device_category", "host"]):
+            # Windowing and tensorizing ..... #
+            activity_wnds = mit.windowed(range(len(ts)), wlen, step=wlen)
+            activity_wnds = filter(lambda x: None not in x, activity_wnds)
+            activity_wnds_values = map(lambda x: ts.iloc[list(x)], activity_wnds)
+            activity_wnds_values = list(activity_wnds_values)
+            host_samples = pd.concat(activity_wnds_values, 
+                                     keys=range(len(activity_wnds_values)), names=["sample_idx"])
+            host_samples.reset_index(level=["host", "_time", "device_category"], inplace=True)
+            sample_tensors = X2tensor(host_samples).detach()
+            ebs = self.toembedding(sample_tensors)
+            # t-SNE reduction ..... #
+            ebs2D = TSNE(n_components=3).fit_transform(ebs.detach())
+            ebs2Ddf = pd.DataFrame(ebs2D, columns=[f"x{i}" for i in range(ebs2D.shape[1])])
+            # Zipping times with embeddings ..... #
+            def min_max_series(x):
+                return pd.Series([x["_time"].min(), x["_time"].max()], index=["start", "stop"])
+
+            def mean_timestamp(v):
+                t1, t2 = v
+                return (t1 + pd.Series(v).diff().divide(2)).iloc[1]
+
+            sample_groups = host_samples.groupby(level="sample_idx").apply(min_max_series)
+            sample_groups = pd.concat([sample_groups, ebs2Ddf], axis=1, sort=False)
+            sample_groups_time_idx = sample_groups.apply(lambda x: mean_timestamp(x[["start", "stop"]].values), axis=1)
+            # TODO: merge indexes
+
+            import pdb; pdb.set_trace() 
+            print(22)
 
     def forward(self, activity=None, context=None, coherency_activity=None):
         e_actv = self.toembedding(activity)

@@ -295,5 +295,5 @@ if __name__ == "__main__":
             grid_res = pd.concat([grid_res, pd.Series(kfold_res).to_frame().T])
     grid_res.to_pickle(args.outputfile)
 
-
+    # TODO: retrain and compute statistics on test set
 
