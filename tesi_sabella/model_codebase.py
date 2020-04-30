@@ -12,10 +12,10 @@ import numpy as np
 from tqdm import tqdm
 
 
-INCOHERENT = torch.tensor([0., 1.], dtype=torch.float32)
 COHERENT = torch.tensor([1., 0.], dtype=torch.float32)
-NORMAL_TRAFFIC = torch.tensor([0., 1.], dtype=torch.float32)
-ATTACK_TRAFFIC = torch.tensor([1., 0.], dtype=torch.float32)
+INCOHERENT = torch.tensor([0., 1.], dtype=torch.float32)
+NORMAL_TRAFFIC = torch.tensor([1., 0.], dtype=torch.float32)
+ATTACK_TRAFFIC = torch.tensor([0., 1.], dtype=torch.float32) 
 
 
 # ----- ----- DATA RESHAPING ----- ----- #
@@ -147,12 +147,35 @@ class Contextual_Coherency():
     def __init__(self, alpha=.5):
         self.alpha = alpha
 
-    def __call__(self,  model_output, coh_label):
+    def __call__(self,  model_output, labels):
         e_actv, e_ctx, coherency_score = model_output
+        coh_label = labels["coherency_label"]
+        
         context_loss = torch.norm(e_actv - e_ctx, 2)
         coherency_loss = F.binary_cross_entropy(coherency_score, coh_label)
         ctx_coh = (self.alpha * context_loss) + ((1 - self.alpha) * coherency_loss)
         return ctx_coh 
+
+
+class Ts2VecScore():
+    def __init__(self, measure, onlabel):
+        self.measure = measure
+        self.label = onlabel
+
+    @property
+    def __name__(self):
+        return f"{self.label}__{self.measure.__name__}"
+
+    def __call__(self, fsarg, X=None, y=None):
+        # Extractor called
+        if isinstance(fsarg, dict):
+            return fsarg[self.label]
+        # Scorer callback
+        _, _, y_hat = fsarg.forward(X)
+        y_cat = np.argmax(y, axis=1)
+        y_hat_cat = np.argmax(np.round(y_hat), axis=1)
+        res = self.measure(y_cat, y_hat_cat)
+        return res
 
 
 # ----- ----- MODEL ----- ----- #
@@ -164,11 +187,8 @@ class Ts2Vec(torch.nn.Module):
         self.coherency = nn.Sequential(
             nn.Linear(128, 2),
             nn.Softmax())
-
-    def to2Dembedding(self, df):
-        pass
     
-    def anomalyScore(self, e_a1, e_a2):
+    def anomaly_score(self, e_a1, e_a2):
         return self.coherency((e_a1 + e_a2) / 2)
 
     def toembedding(self, x):
@@ -178,6 +198,6 @@ class Ts2Vec(torch.nn.Module):
         e_actv = self.toembedding(activity)
         e_ctx = self.toembedding(context.detach())
         e_cohactv = self.toembedding(coherency_activity.detach())
-        coh_score = self.coherency(e_actv + e_cohactv)
+        coh_score = self.anomaly_score(e_actv, e_cohactv)
         
         return (e_actv, e_ctx, coh_score)

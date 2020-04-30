@@ -1,7 +1,12 @@
 from collections import defaultdict
+import pandas as pd
+from tqdm import tqdm
+from sklearn.metrics import make_scorer
 from sklearn.model_selection import ParameterGrid
 from pathlib import Path
+from skorch.callbacks import EpochScoring
 from sklearn.model_selection import GridSearchCV
+import sklearn.metrics as skmetrics 
 from sklearn.model_selection import KFold
 from skorch.net import NeuralNet
 import argparse
@@ -14,6 +19,10 @@ import pandas as pd
 import pickle
 import random
 import torch
+
+
+def tqdm_iterator(dataset, **kwargs):
+    return tqdm(torch.utils.data.DataLoader(dataset, **kwargs))
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -216,6 +225,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
+    parser.add_argument("--outfile", "-o", help="Grid-search output file", type=Path)
     # parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
     args = parser.parse_args()
 
@@ -235,19 +245,36 @@ if __name__ == "__main__":
     X_train = cb.X2split_tensors(train_set["X"])
     Y_train = { k: train_set[k] for k in ["coherency_label", "attack"] }
 
+    # Scoring ..... #
+    coherence_accuracy = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency_label")
+    epoch_coh_acc = EpochScoring(coherence_accuracy, target_extractor=coherence_accuracy)
+    
+    coherence_rec = cb.Ts2VecScore(skmetrics.recall_score, "coherency_label")
+    epoch_coh_rec = EpochScoring(coherence_rec, target_extractor=coherence_rec)
+
+    coherence_precision = cb.Ts2VecScore(skmetrics.precision_score, "coherency_label")
+    epoch_coh_prec = EpochScoring(coherence_precision, target_extractor=coherence_precision)
+
     # Grid hyperparams ..... #
     kf = KFold(n_splits=5)
     net = NeuralNet(
         cb.Ts2Vec, 
         cb.Contextual_Coherency,
-        optimizer=torch.optim.Adam)    
+        optimizer=torch.optim.Adam,
+        callbacks=[
+            ("coherency precision", epoch_coh_prec),
+            ("coherency recall", epoch_coh_rec),
+            ("coherency accuracy", epoch_coh_acc),
+        ])    
     grid_params = ParameterGrid({
-        'lr': [0.01, 0.02],
-        'max_epochs': [10, 20],
+        'lr': [0.033, 0.02],
+        'max_epochs': [1],
     })
 
     # Grid search ..... #
-    for params in grid_params:  
+    logging.debug("Starting grid search")
+    grid_res = pd.DataFrame()
+    for params in tqdm(grid_params):  
         # Parameter initialization
         for k, v in params.items():
             setattr(net, k, v)
@@ -260,7 +287,13 @@ if __name__ == "__main__":
             X_cv_vl = { k: v[vl_index, :] for k, v in X_train.items() }
             Y_cv_vl = { k: v[vl_index, :] for k, v in Y_train.items() }
             
-            gs_results = net.fit(X_cv_train, Y_cv_train["coherency_label"])
+            fmodel = net.fit(X_cv_train, Y_cv_train)
+            # Storing fold results
+            ignore_keys = ['batches', 'epoch', 'train_batch_count', 'valid_batch_count']
+            kfold_res = {k:v for k,v in fmodel.history[-1].items() if k not in ignore_keys}
+            kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
+            grid_res = pd.concat([grid_res, pd.Series(kfold_res).to_frame().T])
+    grid_res.to_pickle(args.outputfile)
 
 
 
