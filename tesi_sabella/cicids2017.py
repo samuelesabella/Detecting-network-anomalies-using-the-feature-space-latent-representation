@@ -14,7 +14,7 @@ import pandas as pd
 import pickle
 import random
 import torch
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -157,10 +157,9 @@ def prepare_dataset(df):
     return train_set, None
 
     test_set = defaultdict(list)
-    g_sample_idx = 0
     for d in [4, 5]: #, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
-        df_day_preproc = pr.preprocessing(df_day)
+        df_day_preproc = pr.preprocessing(df_day, update=False)
         test_day = cb.ts_windowing(df_day_preproc)
         
         attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].numpy()

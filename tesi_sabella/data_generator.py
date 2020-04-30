@@ -30,9 +30,10 @@ hour2ts = [(MORNING,   range(6,  12)),
 hour2ts = { h: t for t, hrange in hour2ts for h in hrange }
 
 class Preprocessor():
-    def __init__(self):
+    def __init__(self, deltas=True, discretize=True):
+        self.compute_deltas = deltas
+        self.compute_discrtz = discretize
         self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=7, encode="ordinal", strategy="quantile"))
-        # self.kbins = KBinsDiscretizer(n_bins=7, encode="ordinal", strategy="quantile")
 
     @staticmethod
     def date_as_feature(df):
@@ -53,12 +54,13 @@ class Preprocessor():
         traffic = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
         missing_traffic = (df[traffic] == 0).all(axis=1)
         df[missing_traffic].replace(0, np.NaN)
-        r_mean = df[traffic].rolling(min_periods=2, window=3, center=True).sum() / 2
+        r_mean = df[traffic].rolling(min_periods=1, window=3, center=True).sum().shift(-1) / 2
         df.loc[missing_traffic, traffic] = r_mean[missing_traffic]
         return df
     
-    def preprocessing(self, df, update=False):
+    def preprocessing(self, df, update=True):
         df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
+        df = df.fillna(0)
         df = Preprocessor.fill_zero_traffic(df)
     
         # DPI unit length normalization ..... #
@@ -68,25 +70,27 @@ class Preprocessor():
         df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum, axis=0)        
     
         # Non decreasing delta discretization ..... #
-        non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
-        df[non_decreasing] = df[non_decreasing].diff()
-        df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
+        if self.compute_deltas:
+            non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
+            df[non_decreasing] = df[non_decreasing].diff()
+            df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
     
         # Feature discretization ..... #
         # Note: it was avoided using pandas qcut/cut due to the decoupling between fit and transform 
         #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
         #       with weekly data and used multiple times while the model is running
-        def discretize_ts(x):
-            v = x.values.reshape(-1, 1)
-            kbins = self.column_kbins[x.name]
-            if update:
-                kbins.fit(v)
-            vd = kbins.transform(v).reshape(-1)
-            return vd
-        non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
-        groups = df[non_dpi].groupby(level=["device_category", "host"], group_keys=False)
-        # Discretize individually each column of each host
-        df[non_dpi] = groups.apply(lambda host_ts: host_ts.apply(discretize_ts))
+        if self.compute_discrtz:
+            def discretize_ts(x):
+                v = x.values.reshape(-1, 1)
+                kbins = self.column_kbins[x.name]
+                if update:
+                    kbins.fit(v)
+                vd = kbins.transform(v).reshape(-1)
+                return vd
+            non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
+            groups = df[non_dpi].groupby(level=["device_category", "host"], group_keys=False)
+            # Discretize individually each column of each host
+            df[non_dpi] = groups.apply(lambda host_ts: host_ts.apply(discretize_ts))
     
         # Date/hour as a feature ..... #
         df = Preprocessor.date_as_feature(df)
