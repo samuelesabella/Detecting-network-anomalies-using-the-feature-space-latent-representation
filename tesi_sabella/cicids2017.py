@@ -14,7 +14,6 @@ import pandas as pd
 import pickle
 import random
 import torch
-# logging.basicConfig(level=logging.DEBUG)
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -213,6 +212,8 @@ def load_dataset(path):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
+
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
     # parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)

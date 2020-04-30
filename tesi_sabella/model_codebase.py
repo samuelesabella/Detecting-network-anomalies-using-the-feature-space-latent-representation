@@ -20,17 +20,6 @@ ATTACK_TRAFFIC = torch.tensor([1., 0.], dtype=torch.float32)
 
 # ----- ----- DATA RESHAPING ----- ----- #
 # ----- ----- -------------- ----- ----- #
-def data_split(df, seed):
-    """Returns (train_groups, test_groups) with
-        train_groups: list containing continuous samples without attack
-        test_groups: list containing continuous times samples also with attacks
-    """
-    normal_traffic = df[df["attack"] == "none"]
-    random.Random(seed).shuffle(l)
-    train_index = int(len(l) * .80)
-    return l[:train_index], l[train_index:]
-
-
 class RNTrunc():
     def __init__(self, mean, std, clip_values):
         clip_min, clip_max = clip_values
@@ -152,7 +141,6 @@ def X2tensor(X):
     return torch.tensor(ts_values).float()
 
 
-
 # ----- ----- LOSSES/SCORING ----- ----- #
 # ----- ----- -------------- ----- ----- #
 class Contextual_Coherency():
@@ -160,7 +148,6 @@ class Contextual_Coherency():
         self.alpha = alpha
 
     def __call__(self,  model_output, coh_label):
-        import pdb; pdb.set_trace() 
         e_actv, e_ctx, coherency_score = model_output
         context_loss = torch.norm(e_actv - e_ctx, 2)
         coherency_loss = F.binary_cross_entropy(coherency_score, coh_label)
