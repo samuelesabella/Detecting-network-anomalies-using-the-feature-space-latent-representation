@@ -1,14 +1,14 @@
 from collections import defaultdict
-import pandas as pd
-from tqdm import tqdm
-from sklearn.metrics import make_scorer
-from sklearn.model_selection import ParameterGrid
 from pathlib import Path
-from skorch.callbacks import EpochScoring
+from sklearn.metrics import make_scorer
 from sklearn.model_selection import GridSearchCV
-import sklearn.metrics as skmetrics 
 from sklearn.model_selection import KFold
+from sklearn.model_selection import ParameterGrid
+from skorch.callbacks import EpochScoring, EarlyStopping
+from skorch.dataset import Dataset
+from skorch.helper import predefined_split
 from skorch.net import NeuralNet
+from tqdm import tqdm
 import argparse
 import data_generator as generator
 import logging
@@ -16,8 +16,11 @@ import model_codebase as cb
 import numpy as np
 import os
 import pandas as pd
+import pandas as pd
 import pickle
 import random
+import sklearn.metrics as skmetrics 
+import skorch
 import torch
 
 
@@ -162,10 +165,11 @@ def prepare_dataset(df):
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
     train_set = cb.ts_windowing(df_train, overlapping=.8)
+
     return train_set, None
 
     test_set = defaultdict(list)
-    for d in [4, 5]: #, 6, 7]:
+    for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day, update=False)
         test_day = cb.ts_windowing(df_day_preproc)
@@ -176,11 +180,11 @@ def prepare_dataset(df):
 
         sampled_rows = np.concatenate([normal_rows, attacks_rows])
         sample_df = test_day["X"].loc[sampled_rows]
-        sample_coh_label = test_day["coherency_label"][sampled_rows]
+        sample_coh_label = test_day["coherency"][sampled_rows]
         sample_attack_label = test_day["attack"][sampled_rows]
 
         test_set["X"].append(sample_df)
-        test_set["coherency_label"].append(sample_coh_label)
+        test_set["coherency"].append(sample_coh_label)
         test_set["attack"].append(sample_attack_label)
     
     # Resetting sample indexes for test set
@@ -193,7 +197,7 @@ def prepare_dataset(df):
     test_set["X"].drop(columns=["sample_idx"], inplace=True)
     
     # concatenating labels 
-    test_set["coherency_label"] = torch.cat(test_set["coherency_label"])
+    test_set["coherency"] = torch.cat(test_set["coherency"])
     test_set["attack"] = torch.cat(test_set["attack"])
 
     return train_set, test_set
@@ -231,29 +235,19 @@ if __name__ == "__main__":
 
     # Data preprocessing ..... #
     df = pd.read_pickle(args.timeseries)
-    train_set, test_set = prepare_dataset(df)# if not args.dataset: 
-
-    # df = pd.read_pickle(args.timeseries)
-    #     train_set, test_set = prepare_dataset(df)
-    #     store_dataset(train_set, args.timeseries.parent / "train") 
-    #     store_dataset(test_set, args.timeseries.parent / "test")
-    # else:
-    #     train_set = load_dataset(args.dataset / "train")
-    #     test_set = load_dataset(args.dataset / "test")
-    # import pdb; pdb.set_trace() 
+    train_set, test_set = prepare_dataset(df)
     
     X_train = cb.X2split_tensors(train_set["X"])
-    Y_train = { k: train_set[k] for k in ["coherency_label", "attack"] }
+    Y_train = { k: train_set[k] for k in ["coherency", "attack"] }
+
+    # X_test = cb.X2split_tensors(test_set["X"])
+    # Y_test = { k: test_set[k] for k in ["coherency", "attack"] }
+    # test_set = Dataset(X_test, Y_test)
 
     # Scoring ..... #
-    coherence_accuracy = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency_label")
-    epoch_coh_acc = EpochScoring(coherence_accuracy, target_extractor=coherence_accuracy)
-    
-    coherence_rec = cb.Ts2VecScore(skmetrics.recall_score, "coherency_label")
-    epoch_coh_rec = EpochScoring(coherence_rec, target_extractor=coherence_rec)
-
-    coherence_precision = cb.Ts2VecScore(skmetrics.precision_score, "coherency_label")
-    epoch_coh_prec = EpochScoring(coherence_precision, target_extractor=coherence_precision)
+    coh_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency").epoch_score()
+    coh_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "coherency").epoch_score()
+    coh_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "coherency").epoch_score()
 
     # Grid hyperparams ..... #
     kf = KFold(n_splits=5)
@@ -261,14 +255,14 @@ if __name__ == "__main__":
         cb.Ts2Vec, 
         cb.Contextual_Coherency,
         optimizer=torch.optim.Adam,
+        train_split=None,
         callbacks=[
-            ("coherency precision", epoch_coh_prec),
-            ("coherency recall", epoch_coh_rec),
-            ("coherency accuracy", epoch_coh_acc),
+            coh_acc_vl, coh_rec_vl, coh_prec_vl,
+            EarlyStopping("valid_loss", lower_is_better=True)
         ])    
     grid_params = ParameterGrid({
-        'lr': [0.033, 0.02],
-        'max_epochs': [1],
+        # "lr": [],
+        "max_epochs": [ 2 ],
     })
 
     # Grid search ..... #
@@ -280,20 +274,28 @@ if __name__ == "__main__":
             setattr(net, k, v)
         
         # Kfold fitting 
-        for train_index, vl_index in kf.split(Y_train["coherency_label"]):
+        for train_index, vl_index in kf.split(Y_train["coherency"]):
             X_cv_train = { k: v[train_index, :] for k, v in X_train.items() }
             Y_cv_train = { k: v[train_index, :] for k, v in Y_train.items() }
 
             X_cv_vl = { k: v[vl_index, :] for k, v in X_train.items() }
             Y_cv_vl = { k: v[vl_index, :] for k, v in Y_train.items() }
-            
+            cv_validation = Dataset(X_cv_vl, Y_cv_vl)
+
+            net.train_split = predefined_split(cv_validation)
             fmodel = net.fit(X_cv_train, Y_cv_train)
             # Storing fold results
-            ignore_keys = ['batches', 'epoch', 'train_batch_count', 'valid_batch_count']
+            ignore_keys = ["batches", "epoch", "train_batch_count", "valid_batch_count"]
             kfold_res = {k:v for k,v in fmodel.history[-1].items() if k not in ignore_keys}
             kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
             grid_res = pd.concat([grid_res, pd.Series(kfold_res).to_frame().T])
-    grid_res.to_pickle(args.outputfile)
+    # grid_res.to_pickle(args.outputfile)
+    import pdb; pdb.set_trace() 
 
-    # TODO: retrain and compute statistics on test set
+    # Retrain and test set results ..... #
+    # TODO get best hyperparms and set net neural net
+    for k, v in params.items():
+        setattr(net, k, v)
+    net.train_split = predefined_split(test_set)
+    fmodel = net.fit(X_train, Y_train)
 

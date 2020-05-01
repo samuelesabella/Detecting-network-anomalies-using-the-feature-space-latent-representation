@@ -1,16 +1,16 @@
-import torch
-import torch.nn as nn
-from sklearn.manifold import TSNE
-import torch.nn.functional as F
-import more_itertools as mit
-import math
-from scipy.stats import truncnorm
 from collections import defaultdict
-import logging
+from scipy.stats import truncnorm
+from sklearn.manifold import TSNE
+from skorch.callbacks import EpochScoring, EarlyStopping
+from tqdm import tqdm
+import math
+import more_itertools as mit
+import numpy as np
 import pandas as pd
 import random
-import numpy as np
-from tqdm import tqdm
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 COHERENT = torch.tensor([1., 0.], dtype=torch.float32)
@@ -95,7 +95,7 @@ def ts_windowing(df, w_minutes=14, sub_w_minutes=7, overlapping=.9):
             samples["context"].append(ctx)
             samples["coherency_context"].append(coh_ctx)
 
-            samples["coherency_label"].append(coh_label)
+            samples["coherency"].append(coh_label)
             if "attack" in ctx:
                 ctx_attack = NORMAL_TRAFFIC if (ctx["attack"]=="none").all() else ATTACK_TRAFFIC
                 samples["attack"].append(ctx_attack)
@@ -128,7 +128,7 @@ def ts_windowing(df, w_minutes=14, sub_w_minutes=7, overlapping=.9):
     # Concatenating labels ..... #
     if "attack" in samples:
         samples["attack"] = torch.stack(samples["attack"])
-    samples["coherency_label"] = torch.stack(samples["coherency_label"])
+    samples["coherency"] = torch.stack(samples["coherency"])
 
     return samples
 
@@ -150,7 +150,7 @@ class Contextual_Coherency():
 
     def __call__(self,  model_output, labels):
         e_actv, e_ctx, coherency_score = model_output
-        coh_label = labels["coherency_label"]
+        coh_label = labels["coherency"]
         
         context_loss = torch.norm(e_actv - e_ctx, 2)
         coherency_loss = F.binary_cross_entropy(coherency_score, coh_label)
@@ -166,6 +166,12 @@ class Ts2VecScore():
     @property
     def __name__(self):
         return f"{self.label}__{self.measure.__name__}"
+
+    def epoch_score(self):
+        es = EpochScoring(self, target_extractor=self, 
+                          on_train=False, lower_is_better=False, 
+                          name=f"valid_{self.__name__}")
+        return es
 
     def __call__(self, fsarg, X=None, y=None):
         # Extractor called
