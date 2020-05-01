@@ -1,7 +1,8 @@
 from collections import defaultdict
 from scipy.stats import truncnorm
 from sklearn.manifold import TSNE
-from skorch.callbacks import EpochScoring, EarlyStopping
+from skorch.callbacks import EpochScoring
+import logging
 from tqdm import tqdm
 import math
 import more_itertools as mit
@@ -168,17 +169,25 @@ class Ts2VecScore():
         return f"{self.label}__{self.measure.__name__}"
 
     def epoch_score(self):
-        es = EpochScoring(self, target_extractor=self, 
-                          on_train=False, lower_is_better=False, 
-                          name=f"valid_{self.__name__}")
-        return es
+        es_tr = EpochScoring(self, target_extractor=self, 
+                             on_train=True, lower_is_better=False, 
+                             name=f"train_{self.__name__}")
+        es_vl = EpochScoring(self, target_extractor=self, 
+                             on_train=False, lower_is_better=False, 
+                             name=f"valid_{self.__name__}")
+        return es_tr, es_vl
 
     def __call__(self, fsarg, X=None, y=None):
         # Extractor called
         if isinstance(fsarg, dict):
             return fsarg[self.label]
         # Scorer callback
-        _, _, y_hat = fsarg.forward(X)
+        with torch.no_grad():
+            if self.label == "attack":
+                y_hat = fsarg.module_.context_anomaly(X["context"])
+            else:
+                _, _, y_hat = fsarg.forward(X)
+
         y_cat = np.argmax(y, axis=1)
         y_hat_cat = np.argmax(np.round(y_hat), axis=1)
         res = self.measure(y_cat, y_hat_cat)
@@ -195,6 +204,9 @@ class Ts2Vec(torch.nn.Module):
             nn.Linear(128, 2),
             nn.Softmax())
     
+    def context_anomaly(ctx):
+        # TODO extract a1 and a2, compute embedding and compute anomaly score
+
     def anomaly_score(self, e_a1, e_a2):
         return self.coherency((e_a1 + e_a2) / 2)
 
@@ -223,7 +235,7 @@ class Ts2Vec(torch.nn.Module):
                 return pd.Series([x["_time"].min(), x["_time"].max()], index=["start", "stop"])
 
             def mean_timestamp(v):
-                t1, t2 = v
+                t1, _  = v
                 return (t1 + pd.Series(v).diff().divide(2)).iloc[1]
 
             sample_groups = host_samples.groupby(level="sample_idx").apply(min_max_series)
