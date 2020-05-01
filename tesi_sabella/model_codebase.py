@@ -210,7 +210,7 @@ class Ts2Vec(torch.nn.Module):
             sample_tensors = X2tensor(host_samples).detach()
             ebs = self.toembedding(sample_tensors)
             # t-SNE reduction ..... #
-            ebs2D = TSNE(n_components=3).fit_transform(ebs.detach())
+            ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
             ebs2Ddf = pd.DataFrame(ebs2D, columns=[f"x{i}" for i in range(ebs2D.shape[1])])
             # Zipping times with embeddings ..... #
             def min_max_series(x):
@@ -223,10 +223,11 @@ class Ts2Vec(torch.nn.Module):
             sample_groups = host_samples.groupby(level="sample_idx").apply(min_max_series)
             sample_groups = pd.concat([sample_groups, ebs2Ddf], axis=1, sort=False)
             sample_groups_time_idx = sample_groups.apply(lambda x: mean_timestamp(x[["start", "stop"]].values), axis=1)
-            # TODO: merge indexes
-
-            import pdb; pdb.set_trace() 
-            print(22)
+            mlt_idx = pd.MultiIndex.from_tuples([(dev_cat, host, t) for t in sample_groups_time_idx])
+            sample_groups = sample_groups.set_index(mlt_idx) 
+            sample_groups = sample_groups.rename_axis(index=["device_category", "host", "time"])
+            res_map = pd.concat([res_map, sample_groups])
+        return res_map
 
     def forward(self, activity=None, context=None, coherency_activity=None):
         e_actv = self.toembedding(activity)
