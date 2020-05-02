@@ -184,7 +184,7 @@ class Ts2VecScore():
         # Scorer callback
         with torch.no_grad():
             if self.label == "attack":
-                y_hat = fsarg.module_.context_anomaly(X["context"])
+                y_hat = fsarg.module_.context_anomaly(X.X["context"])
             else:
                 _, _, y_hat = fsarg.forward(X)
 
@@ -204,8 +204,10 @@ class Ts2Vec(torch.nn.Module):
             nn.Linear(128, 2),
             nn.Softmax())
     
-    def context_anomaly(ctx):
-        # TODO extract a1 and a2, compute embedding and compute anomaly score
+    def context_anomaly(self, contexts):
+        e_a1 = self.toembedding(contexts[:, :28])
+        e_a2 = self.toembedding(contexts[:, 28:])
+        return self.anomaly_score(e_a1, e_a2)
 
     def anomaly_score(self, e_a1, e_a2):
         return self.coherency((e_a1 + e_a2) / 2)

@@ -206,7 +206,7 @@ def store_dataset(dataset, path):
         if torch.is_tensor(v):
             torch.save(v, path / f"{k}.torch.pkl")
         elif isinstance(v, pd.DataFrame):
-            pd.to_pickle(v, path / f"{k}.pandas.pkl") 
+            pd.to_pickle(v.reset_index(), path / f"{k}.pandas.pkl") 
 
 
 def load_dataset(path):
@@ -217,7 +217,7 @@ def load_dataset(path):
         if "torch" in f:
             dataset[key] = torch.load(fpath)
         elif "pandas" in f:
-            dataset[key] = pd.read_pickle(fpath)
+            dataset[key] = pd.read_pickle(fpath).set_index(["sample_idx", "model_input"])
     return dataset
 
 
@@ -233,13 +233,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
-    parser.add_argument("--outfile", "-o", help="Grid-search output file", type=Path)
-    # parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
+    parser.add_argument("--outfile", "-o", help="Grid-search output file", type=Path, required=True)
+    parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
     args = parser.parse_args()
 
-    # Data preprocessing ..... #
-    df = pd.read_pickle(args.timeseries)
-    train_set, test_set = prepare_dataset(df)
+    # Data loading ..... # 
+    if args.timeseries is not None: 
+        df = pd.read_pickle(args.timeseries)
+        train_set, test_set = prepare_dataset(df)
+        store_dataset(train_set, args.timeseries.parent / "model_train") 
+        store_dataset(test_set, args.timeseries.parent / "model_test")
+    else:
+        train_set = load_dataset(args.dataset / "model_train")
+        test_set = load_dataset(args.dataset / "model_test")
     
     X_train = cb.X2split_tensors(train_set["X"])
     Y_train = { k: train_set[k] for k in ["coherency", "attack"] }
@@ -253,6 +259,10 @@ if __name__ == "__main__":
     coh_rec_tr, coh_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "coherency").epoch_score()
     coh_prec_tr, coh_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "coherency").epoch_score()
 
+    attack_acc_tr, attack_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "attack").epoch_score()
+    attack_rec_tr, attack_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "attack").epoch_score()
+    attack_prec_tr, attack_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "attack").epoch_score()
+
     # Grid hyperparams ..... #
     kf = KFold(n_splits=5)
     net = NeuralNet(
@@ -263,6 +273,7 @@ if __name__ == "__main__":
         callbacks=[
             coh_acc_tr, coh_rec_tr, coh_prec_tr,
             coh_acc_vl, coh_rec_vl, coh_prec_vl,
+            attack_acc_tr, attack_acc_vl,
             EarlyStopping("valid_loss", lower_is_better=True)
         ])    
     grid_params = ParameterGrid({
@@ -290,6 +301,7 @@ if __name__ == "__main__":
             net.train_split = predefined_split(cv_validation)
             fmodel = net.fit(X_cv_train, Y_cv_train)
             grid_res = pd.concat([grid_res, last_res_dframe(fmodel, params)])
+    grid_res = grid_res.infer_objects()
 
     # Retrain and test set results ..... #
     grid_best_choice = "valid_coherency__accuracy_score"
@@ -306,8 +318,8 @@ if __name__ == "__main__":
     grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
     grid_res = grid_res.infer_objects()
 
-    grid_res.to_pickle(args.outputfile / "grid_results.pkl")
+    args.outfile.mkdir(parents=True, exist_ok=True)
+    grid_res.to_pickle(args.outfile/ "grid_results.pkl")
     torch.save(net.module_, args.outfile / "ts2vec.torch")
-    import pdb; pdb.set_trace() 
 
 
