@@ -20,7 +20,13 @@ import random
 import sklearn.metrics as skmetrics 
 import skorch
 import torch
-import logging
+
+
+# Reproducibility .... #
+SEED = 117697 
+random.seed(SEED)
+torch.manual_seed(SEED)
+np.random.seed(SEED)
 
 
 def tqdm_iterator(dataset, **kwargs):
@@ -150,26 +156,18 @@ class CICIDS2017(generator.FluxDataGenerator):
 
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
-
-# Reproducibility .... #
-SEED = 117697 
-random.seed(SEED)
-torch.manual_seed(SEED)
-np.random.seed(SEED)
-
-
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
     
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
-    train_set = cb.ts_windowing(df_train, overlapping=.8)
+    train_set = cb.ts_windowing(df_train)
 
     test_set = defaultdict(list)
     for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day, update=False)
-        test_day = cb.ts_windowing(df_day_preproc, overlapping=.8)
+        test_day = cb.ts_windowing(df_day_preproc)
         
         attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].unique()
         normal_rows = torch.where(test_day["attack"] == cb.NORMAL_TRAFFIC)[0].unique()
@@ -226,6 +224,11 @@ def last_res_dframe(net, params):
     kfold_res = {k:v for k,v in net.history[-1].items() if k not in ignore_keys}
     kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
     return pd.Series(kfold_res).to_frame().T
+
+
+def setparams(net, params):
+    for k, v in params.items():
+        setattr(net, k, v)
 
 
 if __name__ == "__main__":
@@ -285,10 +288,7 @@ if __name__ == "__main__":
     logging.debug("Starting grid search")
     grid_res = pd.DataFrame()
     for params in tqdm(grid_params):  
-        # Parameter initialization
-        for k, v in params.items():
-            setattr(net, k, v)
-        
+        setparams(net, params) 
         # Kfold fitting 
         for train_index, vl_index in kf.split(Y_train["coherency"]):
             X_cv_train = { k: v[train_index, :] for k, v in X_train.items() }
@@ -303,14 +303,14 @@ if __name__ == "__main__":
             grid_res = pd.concat([grid_res, last_res_dframe(fmodel, params)])
     grid_res = grid_res.infer_objects()
 
-    # Retrain and test set results ..... #
+    # Get best configuration ..... #
     grid_best_choice = "valid_coherency__accuracy_score"
     hyperpar_cols = [c for c in grid_res.columns if "hyperparam" in c]
     grid_mean = grid_res.groupby(hyperpar_cols)[grid_best_choice].mean()
-    best_params = {k: v for k, v in zip(grid_mean.index.names, grid_mean.idxmax())}
+    best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
     
-    for k, v in best_params.items():
-        setattr(net, k, v)
+    # Retrain on whole dataset ..... #
+    setparams(net, best_params)
     net.train_split = predefined_split(test_set)
     best_refit = net.fit(X_train, Y_train)
     best_refit_res = last_res_dframe(best_refit, best_params) 
@@ -320,6 +320,6 @@ if __name__ == "__main__":
 
     args.outfile.mkdir(parents=True, exist_ok=True)
     grid_res.to_pickle(args.outfile/ "grid_results.pkl")
-    torch.save(net.module_, args.outfile / "ts2vec.torch")
+    torch.save(net.module_.state_dict(), args.outfile / "ts2vec.torch")
 
 

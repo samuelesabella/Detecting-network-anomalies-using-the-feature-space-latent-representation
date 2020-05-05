@@ -31,65 +31,68 @@ class RNTrunc():
     def __call__(self, size=None):
         return self.r.rvs(size=size)
 
+
 zero_one_normal = RNTrunc(.5, .2, (0, 1))
-
-
-def coherent_context_picker(current_ctx, ctx_idx, context_windows, step_coherency, min_inconsistency_shift):
-    """
-    min_inconsistency_shift -- samples to move at least
-    """
-    r = random.random()
-    next_non_overlapping_ctx = ctx_idx + step_coherency + 1
-    if r < .25: # Sample from the current context
-        return (current_ctx, COHERENT)
-    if r < .5 and next_non_overlapping_ctx < len(context_windows): # Sample from the context of the next activity
-        ctx_b = context_windows[next_non_overlapping_ctx]
-        return (ctx_b, COHERENT)
-    if r < .75: # Sample from context distant in time
-        shift_direction = True if random.random() > 0 else False
-        min_backward_step = ctx_idx - min_inconsistency_shift
-        min_forward_step = ctx_idx + len(current_ctx) + min_inconsistency_shift
-        if ctx_idx > min_inconsistency_shift and ((ctx_idx > len(context_windows) - min_forward_step) or shift_direction):
-            # sample context before
-            random_shift = random.randint(0, min_backward_step)
-        else:
-            # sample context after
-            random_shift = random.randint(min_forward_step, len(context_windows) - 1)
-        x_b = context_windows[random_shift]
-        return (x_b, INCOHERENT)
-    return (None, INCOHERENT) # Sample from full dataset
-
 
 def random_sublist(l, sub_wlen):
     r = int((len(l) - sub_wlen) * zero_one_normal())
     return l.iloc[r:r+sub_wlen]
 
 
-def ts_windowing(df, w_minutes=14, sub_w_minutes=7, overlapping=.9):
+def coherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_windows):
+    """
+        ctx_idx: current context index 
+        next_ctx_idx: index of the successive context with no samples in common with the current one
+        coherency_bounds: tuple <lbound, rbound> the boundaries of the coherent range
+        context_windows: list of all the context windows
+    """
+    r = random.random()
+    if r < .25: # Sample from the current context
+        return (context_windows[ctx_idx], COHERENT)
+    if r < .5 and next_ctx_idx < len(context_windows): # Sample from the context of the next activity
+        ctx_b = context_windows[next_ctx_idx]
+        return (ctx_b, COHERENT)
+    if r < .75: # Sample context distant in time
+        shift_direction = True if random.random() > 0 else False
+        lbound, rbound = coherency_bounds
+        if lbound > 0 and (rbound > len(context_windows) or shift_direction):
+            # sample context before
+            random_shift = random.randint(0, lbound)
+        else:
+            # sample context after
+            random_shift = random.randint(rbound, len(context_windows) - 1)
+        x_b = context_windows[random_shift]
+        return (x_b, INCOHERENT)
+    return (None, INCOHERENT) # Sample from full dataset
+
+
+def ts_windowing(df, ctx_len=28, actv_len=14, overlapping=.95, consistency_range=240):
+    """
+        ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
+        actv_len  --  activity window length, 7 minutes
+        overlapping -- context windowing overlapping
+        consistency_range  --  activity within this range are considered consistent
+    """
     samples = defaultdict(list)
-    # Context window length
-    context_wlen = int(w_minutes * 4) # Samples per minutes (one sample every 15 seconds)
-    # Activity window length
-    activity_wlen = int(sub_w_minutes * 4)
-    # 1 hour distance to have inconsistent context (4 samples per minutes)
-    stepsize = max(int(context_wlen * (1 - overlapping)), 1) 
-    min_inconsistency_dis = math.ceil(4 * 60 / stepsize)
+    window_stepsize = max(int(ctx_len * (1 - overlapping)), 1) 
 
     logging.debug("Windowing time series for each host")
     host_ts = df.groupby(level=['device_category', 'host'])
     for _, ts in tqdm(host_ts):
         # Building context/activity windows ..... #
-        ctx_wnds = mit.windowed(range(len(ts)), context_wlen, step=stepsize)
+        ctx_wnds = mit.windowed(range(len(ts)), ctx_len, step=window_stepsize)
         ctx_wnds = filter(lambda x: None not in x, ctx_wnds)
-        ctx_wnds_values = map(lambda x: ts.iloc[list(x)], ctx_wnds)
-        ctx_wnds_values = list(ctx_wnds_values)
-        actv_wnds = map(lambda x: random_sublist(x, activity_wlen), ctx_wnds_values)
+        ctx_wnds_values = list(map(lambda x: ts.iloc[list(x)], ctx_wnds))
+        actv_wnds = map(lambda x: random_sublist(x, actv_len), ctx_wnds_values)
 
         # Coherency and training tuple generation ...... #
-        def coh_aus(ex):
-            idx, x = ex
-            return coherent_context_picker(x, idx, ctx_wnds_values, activity_wlen, min_inconsistency_dis) 
-        coherent_contexts = map(coh_aus, enumerate(ctx_wnds_values))
+        def coh_aus(i):
+            next_ctx = i + int(ctx_len / window_stepsize)
+            next_incoherent = i + math.ceil(consistency_range / window_stepsize)
+            prev_incoherent = i - consistency_range
+            coherence_bounds = (prev_incoherent, next_incoherent)
+            return coherent_context_picker(i, next_ctx, coherence_bounds, ctx_wnds_values) 
+        coherent_contexts = map(coh_aus, range(len(ctx_wnds_values)))
         h_samples = zip(ctx_wnds_values, actv_wnds, coherent_contexts)
         for ctx, activity, (coh_ctx, coh_label) in h_samples:
             samples["activity"].append(activity)
@@ -105,7 +108,7 @@ def ts_windowing(df, w_minutes=14, sub_w_minutes=7, overlapping=.9):
     def coh_ctx_to_activity(x):
         if x is None:
             x = random.choice(samples["context"])
-        return random_sublist(x, activity_wlen)
+        return random_sublist(x, actv_len)
     logging.debug("Generating coherent activities")
     samples["coherency_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["coherency_context"])))
     del samples["coherency_context"]
@@ -210,10 +213,10 @@ class Ts2Vec(torch.nn.Module):
         return self.anomaly_score(e_a1, e_a2)
 
     def anomaly_score(self, e_a1, e_a2):
-        return self.coherency((e_a1 + e_a2) / 2)
+        raise NotImplemented()
 
     def toembedding(self, x):
-        return self.embedder(x)[0][:, -1]
+        raise NotImplemented()
 
     def to2Dmap(self, df, wlen_minutes=7):
         wlen = wlen_minutes * 4
@@ -256,3 +259,20 @@ class Ts2Vec(torch.nn.Module):
         coh_score = self.anomaly_score(e_actv, e_cohactv)
         
         return (e_actv, e_ctx, coh_score)
+
+
+class Ts2LSTM2Vec(Ts2Vec):
+    def __init__(self):
+        super(Ts2LSTM2Vec, self).__init__()
+        self.embedder = nn.LSTM(37, 128, 3)
+        self.coherency = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 2),
+            nn.Softmax())
+    
+    def anomaly_score(self, e_a1, e_a2):
+        return self.coherency((e_a1 + e_a2) / 2)
+
+    def toembedding(self, x):
+        return self.embedder(x)[0][:, -1]
