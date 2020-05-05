@@ -3,7 +3,6 @@ from pathlib import Path
 from sklearn.model_selection import KFold
 from sklearn.model_selection import ParameterGrid
 from skorch.callbacks import EarlyStopping
-import logging
 from skorch.dataset import Dataset
 from skorch.helper import predefined_split
 from skorch.net import NeuralNet
@@ -15,11 +14,12 @@ import model_codebase as cb
 import numpy as np
 import os
 import pandas as pd
-import pickle
 import random
 import sklearn.metrics as skmetrics 
-import skorch
 import torch
+
+import warnings
+warnings.filterwarnings('ignore')
 
 
 # Reproducibility .... #
@@ -114,12 +114,13 @@ class Cicids2017Preprocessor(generator.Preprocessor):
     def preprocessing(self, df, **kwargs):
         # Filtering hosts ..... #
         df = df[df.index.get_level_values('host').str.contains("192.168.10.")]
+        df = df.drop("dns_qry_sent_rsp_rcvd:replies_error_packets", axis=1)
+        # Removing initial non zero traffic ..... #
+        index_hours = df.index.get_level_values("_time").hour
+        working_hours = (index_hours > 8) & (index_hours < 17)
+        df = df[working_hours]
         # Passing the ball ..... #
         preproc_df = super().preprocessing(df, **kwargs)
-        # Removing initial non zero traffic ..... #
-        index_hours = preproc_df.index.get_level_values("_time").hour
-        working_hours = (index_hours > 8) & (index_hours < 17)
-        preproc_df = preproc_df[working_hours]
     
         return Cicids2017Preprocessor.label(preproc_df)
 
@@ -236,7 +237,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
-    parser.add_argument("--outfile", "-o", help="Grid-search output file", type=Path, required=True)
+    parser.add_argument("--outpath", "-o", help="Grid-search output file", type=Path, required=True)
     parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
     args = parser.parse_args()
 
@@ -269,7 +270,7 @@ if __name__ == "__main__":
     # Grid hyperparams ..... #
     kf = KFold(n_splits=5)
     net = NeuralNet(
-        cb.Ts2Vec, 
+        cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
         optimizer=torch.optim.Adam,
         train_split=None,
@@ -318,8 +319,8 @@ if __name__ == "__main__":
     grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
     grid_res = grid_res.infer_objects()
 
-    args.outfile.mkdir(parents=True, exist_ok=True)
-    grid_res.to_pickle(args.outfile/ "grid_results.pkl")
-    torch.save(net.module_.state_dict(), args.outfile / "ts2vec.torch")
+    args.outpath.mkdir(parents=True, exist_ok=True)
+    grid_res.to_pickle(args.outpath/ "grid_results.pkl")
+    torch.save(net.module_.state_dict(), args.outpath / "ts2vec.torch")
 
 

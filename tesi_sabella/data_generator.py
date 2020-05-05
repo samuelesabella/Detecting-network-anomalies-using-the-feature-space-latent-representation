@@ -6,6 +6,7 @@ import ntopng_constants as ntopng_c
 import numpy as np
 import pandas as pd
 import pathlib 
+import logging
 import pyfluxc.pyfluxc as flux
 import re
 import requests 
@@ -32,7 +33,7 @@ class Preprocessor():
     def __init__(self, deltas=True, discretize=True):
         self.compute_deltas = deltas
         self.compute_discrtz = discretize
-        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=7, encode="ordinal", strategy="quantile"))
+        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=14, encode="ordinal", strategy="quantile"))
 
     @staticmethod
     def date_as_feature(df):
@@ -47,30 +48,39 @@ class Preprocessor():
         return df
     
     @staticmethod
-    def fill_zero_traffic(df):
+    def fillzero(df):
         """Replace zero traffic holes with rolling window mean
         """
-        traffic = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
-        missing_traffic = (df[traffic] == 0).all(axis=1)
+        missing_traffic = (df == 0).all(axis=1)
         df[missing_traffic].replace(0, np.NaN)
-        r_mean = df[traffic].rolling(min_periods=1, window=3, center=True).sum().shift(-1) / 2
-        df.loc[missing_traffic, traffic] = r_mean[missing_traffic]
+        r_mean = df.rolling(min_periods=1, window=3, center=True).sum().shift(-1) / 2
+        df.loc[missing_traffic] = r_mean[missing_traffic]
         return df
     
+    def updatekbins(self, key, values):
+        kbins = self.column_kbins[key]
+        kbins.fit(values)
+
     def preprocessing(self, df, update=True):
-        df = df[ntopng_c.FEATURE_LEVELS["smart"]].copy(deep=True)
-        df = Preprocessor.fill_zero_traffic(df)
+        smart_features = set(ntopng_c.FEATURE_LEVELS["smart"])
+        available_features = set(df.columns)
+        available_cols = available_features.intersection(smart_features)
+        if available_cols != smart_features:
+            missing_c = smart_features - available_cols
+            logging.warning(f"Missing columns: {missing_c}")
+        df = df[available_cols].copy(deep=True)
         df = df.fillna(0)
+        df = Preprocessor.fillzero(df)
     
         # DPI unit length normalization ..... #
         ndpi_num_flows_c = [c for c in df.columns if "ndpi_flows:num_flows" in c]
         ndpi = df[ndpi_num_flows_c]
         ndpi_sum = ndpi.sum(axis=1)
-        df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum + 1e-7, axis=0)        
+        df.loc[:, ndpi_num_flows_c] = ndpi.divide(ndpi_sum + 1e-3, axis=0)        
     
         # Non decreasing delta discretization ..... #
         if self.compute_deltas:
-            non_decreasing = ["traffic:bytes_rcvd", "traffic:bytes_sent"]
+            non_decreasing = [c for c in df.columns if ("traffic:" in c or "dns_qry_sent_rsp_rcvd" in c)] 
             df[non_decreasing] = df[non_decreasing].diff()
             df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
     
@@ -81,9 +91,9 @@ class Preprocessor():
         if self.compute_discrtz:
             def discretize_ts(x):
                 v = x.values.reshape(-1, 1)
-                kbins = self.column_kbins[x.name]
                 if update:
-                    kbins.fit(v)
+                    self.updatekbins(x.name, v)
+                kbins = self.column_kbins[x.name]
                 vd = kbins.transform(v).reshape(-1)
                 return vd
             non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
@@ -145,8 +155,6 @@ class FluxDataGenerator():
         # Drop cutted samples. E.g. range(start=13:46:58, stop:13:49:00) have almost for sure NaN in the first 2 seconds) 
         # Thus we drop NaN values from bytes_rcvd which should never be NaN
         new_samples.dropna(subset=["traffic:bytes_rcvd"])
-        # ndpi protocols have often NaN
-        # new_samples = new_samples.fillna(0)
         # Adding missing columns ..... #
         missing_columns = []
         available_columns = set(new_samples.columns)

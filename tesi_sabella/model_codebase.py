@@ -213,10 +213,10 @@ class Ts2Vec(torch.nn.Module):
         return self.anomaly_score(e_a1, e_a2)
 
     def anomaly_score(self, e_a1, e_a2):
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def toembedding(self, x):
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def to2Dmap(self, df, wlen_minutes=7):
         wlen = wlen_minutes * 4
@@ -264,7 +264,7 @@ class Ts2Vec(torch.nn.Module):
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
         super(Ts2LSTM2Vec, self).__init__()
-        self.embedder = nn.LSTM(37, 128, 3)
+        self.embedder = nn.LSTM(input_size=37, hidden_size=128)
         self.coherency = nn.Sequential(
             nn.Linear(128, 128),
             nn.ReLU(),
@@ -275,4 +275,5 @@ class Ts2LSTM2Vec(Ts2Vec):
         return self.coherency((e_a1 + e_a2) / 2)
 
     def toembedding(self, x):
+        import pdb; pdb.set_trace() 
         return self.embedder(x)[0][:, -1]
