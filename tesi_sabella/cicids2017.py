@@ -283,7 +283,6 @@ if __name__ == "__main__":
         "lr": [ .001, .01, .1 ],
         "max_epochs": [ 1200 ],
     })
-    import pdb; pdb.set_trace() 
 
     # Grid search ..... #
     logging.debug("Starting grid search")
