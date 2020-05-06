@@ -143,16 +143,22 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN, overlapping=.95
 def X2split_tensors(X):
     return { x[0]: X2tensor(x[1]) for x in X.groupby(level=1) }
 
+
 def X2tensor(X):
     clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
     ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
     return torch.tensor(ts_values).float()
 
 
+def gpu_if_available(X, Y):
+    if torch.cuda.is_available():
+        for t in X.values.extend(Y.values):
+            t.gpu() 
+
 # ----- ----- LOSSES/SCORING ----- ----- #
 # ----- ----- -------------- ----- ----- #
 class Contextual_Coherency():
-    def __init__(self, alpha=.5):
+    def __init__(self, alpha=.3):
         self.alpha = alpha
 
     def __call__(self,  model_output, labels):
@@ -204,14 +210,12 @@ class Ts2VecScore():
 # ----- ----- ----- ----- ----- #
 class Ts2Vec(torch.nn.Module):
     def context_anomaly(self, contexts):
-        e_a1 = self.toembedding(contexts[:, :ACTIVITY_LEN])
-        e_a2 = self.toembedding(contexts[:, ACTIVITY_LEN:])
-        return self.anomaly_score(e_a1, e_a2)
-
-    def anomaly_score(self, e_a1, e_a2):
         raise NotImplementedError()
 
     def toembedding(self, x):
+        raise NotImplementedError()
+
+    def forward(self, activity=None, context=None, coherency_activity=None):
         raise NotImplementedError()
 
     def to2Dmap(self, df, wlen=ACTIVITY_LEN):
@@ -247,29 +251,32 @@ class Ts2Vec(torch.nn.Module):
             res_map = pd.concat([res_map, sample_groups])
         return res_map
 
-    def forward(self, activity=None, context=None, coherency_activity=None):
-        e_actv = self.toembedding(activity)
-        e_ctx = self.toembedding(context.detach())
-        e_cohactv = self.toembedding(coherency_activity.detach())
-        coh_score = self.anomaly_score(e_actv, e_cohactv)
-        
-        return (e_actv, e_ctx, coh_score)
-
 
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
-        super(Ts2LSTM2Vec, self).__init__()
-        self.embedder = nn.LSTM(input_size=36, hidden_size=128)
-        self.coherency = nn.Sequential(
+        super(Ts2LSTM2Vec, self).__init__() 
+        self.rnn = nn.RNN(input_size=36, hidden_size=128)
+        self.embedder = nn.Sequential(
             nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(128, 2),
+            nn.Linear(128, 128),
             nn.Softmax())
+        self.cohdiscr = nn.Sequential(
+            nn.Linear(128, 2),
+        )
     
-    def anomaly_score(self, e_a1, e_a2):
-        return self.coherency((e_a1 + e_a2) / 2)
-
     def toembedding(self, x):
-        x = x.permute(1,0,2) # seqlen, batch, input_size
-        lstm_out = self.embedder(x)[0][-1]
-        return lstm_out
+        x = x.permute(1, 0, 2)
+        rnn_out, _ = self.rnn(x)
+        e = self.embedder(rnn_out[-1])
+        return e
+
+    def forward(self, activity=None, context=None, coherency_activity=None):
+        e_actv = self.toembedding(activity)
+        with torch.no_grad():
+            e_ctx = self.toembedding(context)
+            e_cohactv = self.toembedding(coherency_activity)
+            e_comb = (e_actv + e_cohactv) / 2
+        coherency = self.cohdiscr(e_comb)
+        return (e_actv, e_ctx, coherency)
+
