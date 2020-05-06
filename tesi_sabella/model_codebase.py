@@ -19,6 +19,9 @@ INCOHERENT = torch.tensor([0., 1.], dtype=torch.float32)
 NORMAL_TRAFFIC = torch.tensor([1., 0.], dtype=torch.float32)
 ATTACK_TRAFFIC = torch.tensor([0., 1.], dtype=torch.float32) 
 
+CONTEXT_LEN = 28
+ACTIVITY_LEN = 14
+
 
 # ----- ----- DATA RESHAPING ----- ----- #
 # ----- ----- -------------- ----- ----- #
@@ -66,7 +69,7 @@ def coherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_win
     return (None, INCOHERENT) # Sample from full dataset
 
 
-def ts_windowing(df, ctx_len=28, actv_len=14, overlapping=.95, consistency_range=240):
+def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN, overlapping=.95, consistency_range=240):
     """
         ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
         actv_len  --  activity window length, 7 minutes
@@ -200,16 +203,9 @@ class Ts2VecScore():
 # ----- ----- MODEL ----- ----- #
 # ----- ----- ----- ----- ----- #
 class Ts2Vec(torch.nn.Module):
-    def __init__(self):
-        super(Ts2Vec, self).__init__()
-        self.embedder = nn.LSTM(37, 128, 3)
-        self.coherency = nn.Sequential(
-            nn.Linear(128, 2),
-            nn.Softmax())
-    
     def context_anomaly(self, contexts):
-        e_a1 = self.toembedding(contexts[:, :28])
-        e_a2 = self.toembedding(contexts[:, 28:])
+        e_a1 = self.toembedding(contexts[:, :ACTIVITY_LEN])
+        e_a2 = self.toembedding(contexts[:, ACTIVITY_LEN:])
         return self.anomaly_score(e_a1, e_a2)
 
     def anomaly_score(self, e_a1, e_a2):
@@ -218,8 +214,7 @@ class Ts2Vec(torch.nn.Module):
     def toembedding(self, x):
         raise NotImplementedError()
 
-    def to2Dmap(self, df, wlen_minutes=7):
-        wlen = wlen_minutes * 4
+    def to2Dmap(self, df, wlen=ACTIVITY_LEN):
         res_map = pd.DataFrame()
         for (dev_cat, host), ts in df.groupby(level=["device_category", "host"]):
             # Windowing and tensorizing ..... #
@@ -264,7 +259,7 @@ class Ts2Vec(torch.nn.Module):
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
         super(Ts2LSTM2Vec, self).__init__()
-        self.embedder = nn.LSTM(input_size=37, hidden_size=128)
+        self.embedder = nn.LSTM(input_size=36, hidden_size=128)
         self.coherency = nn.Sequential(
             nn.Linear(128, 128),
             nn.ReLU(),
@@ -275,5 +270,6 @@ class Ts2LSTM2Vec(Ts2Vec):
         return self.coherency((e_a1 + e_a2) / 2)
 
     def toembedding(self, x):
-        import pdb; pdb.set_trace() 
-        return self.embedder(x)[0][:, -1]
+        x = x.permute(1,0,2) # seqlen, batch, input_size
+        lstm_out = self.embedder(x)[0][-1]
+        return lstm_out

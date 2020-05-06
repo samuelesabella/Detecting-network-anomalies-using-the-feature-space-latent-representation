@@ -281,8 +281,8 @@ if __name__ == "__main__":
             EarlyStopping("valid_loss", lower_is_better=True)
         ])    
     grid_params = ParameterGrid({
-        "lr": [ .001 ],
-        "max_epochs": [ 1, 2 ],
+        "lr": [ .001, .01, .1 ],
+        "max_epochs": [ 1200 ],
     })
 
     # Grid search ..... #
