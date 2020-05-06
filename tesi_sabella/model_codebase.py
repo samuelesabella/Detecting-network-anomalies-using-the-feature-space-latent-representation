@@ -260,10 +260,10 @@ class Ts2LSTM2Vec(Ts2Vec):
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
-            nn.Softmax())
+            nn.ReLU())
         self.cohdiscr = nn.Sequential(
             nn.Linear(128, 2),
-        )
+            nn.Softmax())
     
     def toembedding(self, x):
         x = x.permute(1, 0, 2)
@@ -276,7 +276,7 @@ class Ts2LSTM2Vec(Ts2Vec):
         with torch.no_grad():
             e_ctx = self.toembedding(context)
             e_cohactv = self.toembedding(coherency_activity)
-            e_comb = (e_actv + e_cohactv) / 2
+        e_comb = (e_actv + e_cohactv) / 2
         coherency = self.cohdiscr(e_comb)
         return (e_actv, e_ctx, coherency)
 
