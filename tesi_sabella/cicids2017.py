@@ -277,13 +277,13 @@ if __name__ == "__main__":
         callbacks=[
             coh_acc_tr, coh_rec_tr, coh_prec_tr,
             coh_acc_vl, coh_rec_vl, coh_prec_vl,
-            attack_acc_tr, attack_acc_vl,
             EarlyStopping("valid_loss", lower_is_better=True)
         ])    
     grid_params = ParameterGrid({
         "lr": [ .001, .01, .1 ],
         "max_epochs": [ 1200 ],
     })
+    import pdb; pdb.set_trace() 
 
     # Grid search ..... #
     logging.debug("Starting grid search")
@@ -311,6 +311,7 @@ if __name__ == "__main__":
     best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
     
     # Retrain on whole dataset ..... #
+    net.callbacks.extend([attack_acc_tr, attack_acc_vl]
     setparams(net, best_params)
     net.train_split = predefined_split(test_set)
     best_refit = net.fit(X_train, Y_train)
