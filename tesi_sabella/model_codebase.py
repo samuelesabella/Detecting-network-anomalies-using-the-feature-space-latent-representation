@@ -246,6 +246,7 @@ class Ts2Vec(torch.nn.Module):
             # t-SNE reduction ..... #
             ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
             ebs2Ddf = pd.DataFrame(ebs2D, columns=[f"x{i}" for i in range(ebs2D.shape[1])])
+
             # Zipping times with embeddings ..... #
             def min_max_series(x):
                 return pd.Series([x["_time"].min(), x["_time"].max()], index=["start", "stop"])
