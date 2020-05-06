@@ -6,11 +6,11 @@ import os
 import sys
 sys.path.append(f"{os.path.dirname(__file__)}/../tesi_sabella")
 from tesi_sabella.data_generator import FluxDataGenerator 
+import tesi_sabella.cicids2017_data_generator as cicids2017
 
 
 # ----- ----- CONSTANTS ----- ----- #
 # ----- ----- --------- ----- ----- #
-
 MOCK_NDPI_FLOWS_COMPLETE = set([
     "ndpi_flows:num_flows__game",
     "ndpi_flows:num_flows__download-filetransfer-filesharing"])
@@ -80,7 +80,7 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
         self.patcher_influx_client = patch("pyfluxc.pyfluxc.FluxClient")
         self.client = self.patcher_influx_client.start()
         type(self.client.return_value).dframe = mock_qresult.copy(deep=True)
-        self.cicids2017 = FluxDataGenerator("test_bucket", "15s", self.client, pd.Timestamp.utcnow())
+        self.cicids2017 = cicids2017.CICIDS2017("test_bucket", "15s", self.client, pd.Timestamp.utcnow())
     
     def tearDown(self):
         self.patcher_influx_client.stop()
@@ -101,6 +101,10 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
         
         pd.testing.assert_frame_equal(sample[target.columns], target, check_like=True)
 
+    def test_duplicate_qres(self):
+        # TODO
+        pass
+
     def test_ndpi(self):
         _, sample = self.cicids2017.pull()
         target = pd.DataFrame({
@@ -115,30 +119,6 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
         
         pd.testing.assert_frame_equal(sample[MOCK_NDPI_FLOWS_COMPLETE], target, check_like=True)
 
-    def test_deltas(self):
-        _, i_sample = self.cicids2017.pull()
-        ii_mock_qresult = mock_qresult.copy(deep=True)
-        ii_mock_qresult["_value"] += 4.
-        ii_mock_qresult["_time"] += pd.Timedelta(minutes=1) 
-        type(self.client.return_value).dframe = ii_mock_qresult.copy(deep=True)
-        _, ii_sample = self.cicids2017.pull()
-        dset = self.cicids2017.to_pandas(delta=True)
-
-        target = pd.DataFrame({
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:25:30"): [1., 1.0, 11.5],
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:25:45"): [1., 1.1, 12.5],  
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:26:00"): [1., 1.2, 13.5],
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:26:15"): [1.,  .7, 14.5],
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:26:30"): [1., 1.0, 15.5],
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:26:45"): [1., 1.1, 16.5],  
-            ("unknown device class", "192.168.10.1", "2020-04-03 12:27:00"): [1., 1.2, 17.5] 
-        }).T
-        target.columns = ["traffic:bytes_rcvd", "ndpi_flows:num_flows__download-filetransfer-filesharing", "active_flows:flows_as_server"]
-        target.index = pd.MultiIndex.from_tuples([(dc, h, pd.to_datetime(d, format="%Y-%m-%d %H:%M:%S")) for (dc, h, d) in target.index])
-        target.index = target.index.rename(["device_category", "host", "_time"])
-
-        pd.testing.assert_frame_equal(dset[target.columns], target, check_like=True)
-
     def test_multi_host_to_pandas(self):
         ii_host = mock_qresult.copy(deep=True)
         ii_host["host"] = "192.168.50.0"
@@ -146,7 +126,7 @@ class TestInfluxHostDataGenerator(unittest.TestCase):
         mock_both_hosts = pd.concat([mock_qresult, ii_host]).reset_index()
         type(self.client.return_value).dframe = mock_both_hosts.copy(deep=True)
         _, sample = self.cicids2017.pull()
-        dset = self.cicids2017.to_pandas(delta=False)
+        dset = self.cicids2017.to_pandas()
 
         target = pd.DataFrame({
             ("unknown device class", "192.168.10.1", "2020-04-03 12:25:15"): [0.,  40.,  101., 10.5],
