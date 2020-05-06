@@ -69,7 +69,8 @@ def coherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_win
     return (None, INCOHERENT) # Sample from full dataset
 
 
-def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN, overlapping=.95, consistency_range=240):
+def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN, 
+        overlapping=.95, consistency_range=240, pick_coherent_activity=True):
     """
         ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
         actv_len  --  activity window length, 7 minutes
@@ -111,7 +112,9 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN, overlapping=.95
     def coh_ctx_to_activity(x):
         if x is None:
             x = random.choice(samples["context"])
-        return random_sublist(x, actv_len)
+        if pick_coherent_activity:
+            return random_sublist(x, actv_len)
+        return x
     logging.debug("Generating coherent activities")
     samples["coherency_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["coherency_context"])))
     del samples["coherency_context"]
@@ -152,8 +155,10 @@ def X2tensor(X):
 
 def gpu_if_available(X, Y):
     if torch.cuda.is_available():
-        for t in X.values.extend(Y.values):
-            t.gpu() 
+        tensors = list(X.values())
+        tensors.extend(Y.values())
+        for t in tensors:
+            t.cuda()
 
 # ----- ----- LOSSES/SCORING ----- ----- #
 # ----- ----- -------------- ----- ----- #
