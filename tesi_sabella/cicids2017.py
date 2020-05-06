@@ -310,7 +310,7 @@ if __name__ == "__main__":
     best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
     
     # Retrain on whole dataset ..... #
-    net.callbacks.extend([attack_acc_tr, attack_acc_vl]
+    net.callbacks.extend([attack_acc_tr, attack_acc_vl])
     setparams(net, best_params)
     net.train_split = predefined_split(test_set)
     best_refit = net.fit(X_train, Y_train)
