@@ -4,6 +4,7 @@ import torch
 import unittest
 import copy
 import pathlib
+import random
 
 import os
 import sys
@@ -11,6 +12,13 @@ sys.path.append(f"{os.path.dirname(__file__)}/../tesi_sabella")
 
 import model_codebase as cb
 import tesi_sabella.cicids2017 as cicids2017
+
+
+# Reproducibility .... #
+SEED = 117697 
+random.seed(SEED)
+torch.manual_seed(SEED)
+np.random.seed(SEED)
 
 
 TIMESERIES_PATH = pathlib.Path("./dataset/CICIDS2017_complete.pkl")
@@ -42,7 +50,14 @@ class TestModelCodebase(unittest.TestCase):
         ctx = df.xs("context", level="model_input")["_time"]
         coh_ctx = df.xs("coherency_activity", level="model_input")["_time"]
         diff = ((coh_ctx - ctx) if coh_ctx.max() > ctx.max() else (ctx - coh_ctx)).values
-        return (diff >= np.timedelta64(1, "h")).all()
+        all_distant = (diff >= np.timedelta64(1, "h")).all()
+
+        ctx_host = df.xs("context", level="model_input")["host"].iloc[0]
+        coh_host = df.xs("coherency_activity", level="model_input")["host"].iloc[0]
+        
+        res = (all_distant or (ctx_host != coh_host))
+        return res
+
 
     def test_coherency(self):
         coh_idx = torch.where(self.samples["coherency"] == cb.COHERENT)[0].unique()
@@ -59,7 +74,5 @@ class TestModelCodebase(unittest.TestCase):
         incoherent_test = incoh_tuples.groupby(level="sample_idx").apply(self.is_incoherent)
         assert(incoherent_test.all())
 
-        import pdb; pdb.set_trace() 
 
     # def test_random_sublist(self):
-    #     import pdb; pdb.set_trace() 

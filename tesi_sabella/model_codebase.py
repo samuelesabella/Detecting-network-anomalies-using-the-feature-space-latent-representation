@@ -82,7 +82,7 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
 
     logging.debug("Windowing time series for each host")
     host_ts = df.groupby(level=['device_category', 'host'])
-    for _, ts in tqdm(host_ts):
+    for (_, host), ts in tqdm(host_ts):
         # Building context/activity windows ..... #
         ctx_wnds = mit.windowed(range(len(ts)), ctx_len, step=window_stepsize)
         ctx_wnds = filter(lambda x: None not in x, ctx_wnds)
@@ -101,7 +101,9 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
         for ctx, activity, (coh_ctx, coh_label) in h_samples:
             samples["activity"].append(activity)
             samples["context"].append(ctx)
-            samples["coherency_context"].append(coh_ctx)
+            # Need host information to pick samples from different host
+            coh_info = host if coh_ctx is None else coh_ctx 
+            samples["coherency_context"].append(coh_info)
 
             samples["coherency"].append(coh_label)
             if "attack" in ctx:
@@ -110,8 +112,12 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
             
     # Picking random coherency contexts ..... #
     def coh_ctx_to_activity(x):
-        if x is None:
-            x = random.choice(samples["context"])
+        # Sampling series from different host
+        while isinstance(x, str):
+            rctx = random.choice(samples["context"])
+            coh_host = rctx.index.get_level_values("host")[0]
+            if coh_host != x:
+                x = rctx
         if pick_coherent_activity:
             return random_sublist(x, actv_len)
         return x
@@ -159,6 +165,7 @@ def gpu_if_available(X, Y):
         tensors.extend(Y.values())
         for t in tensors:
             t.cuda()
+
 
 # ----- ----- LOSSES/SCORING ----- ----- #
 # ----- ----- -------------- ----- ----- #

@@ -292,6 +292,7 @@ if __name__ == "__main__":
     logging.debug("Starting grid search")
     grid_res = pd.DataFrame()
     for params in tqdm(grid_params):  
+        print(params)
         setparams(net, params) 
         # Kfold fitting 
         for train_index, vl_index in kf.split(Y_train["coherency"]):
