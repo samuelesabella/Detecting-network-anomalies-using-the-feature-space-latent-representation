@@ -300,10 +300,11 @@ class Ts2LSTM2Vec(Ts2Vec):
     
     def toembedding(self, x):
         rnn_out, _ = self.rnn(x)
-        e = self.embedder(rnn_out[-1])
+        e = self.embedder(rnn_out[:, -1])
         return e
 
     def forward(self, activity=None, context=None, coherency_activity=None):
+        import pdb; pdb.set_trace() 
         e_actv = self.toembedding(activity)
         e_ctx = self.toembedding(context)
         e_cohactv = self.toembedding(coherency_activity)
