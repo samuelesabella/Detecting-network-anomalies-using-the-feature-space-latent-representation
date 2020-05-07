@@ -1,20 +1,21 @@
 from collections import defaultdict
-import skorch
-import matplotlib.pyplot as plt
 from scipy.stats import truncnorm
 from sklearn.manifold import TSNE
 from skorch.callbacks import EpochScoring
-import logging
 from tqdm import tqdm
 import math
 import more_itertools as mit
 import numpy as np
 import pandas as pd
 import random
+import skorch
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import logging
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+import matplotlib.pyplot as plt
 
 COHERENT = torch.tensor([1., 0.], dtype=torch.float32)
 INCOHERENT = torch.tensor([0., 1.], dtype=torch.float32)
@@ -304,7 +305,6 @@ class Ts2LSTM2Vec(Ts2Vec):
         return e
 
     def forward(self, activity=None, context=None, coherency_activity=None):
-        import pdb; pdb.set_trace() 
         e_actv = self.toembedding(activity)
         e_ctx = self.toembedding(context)
         e_cohactv = self.toembedding(coherency_activity)
