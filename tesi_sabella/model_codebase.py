@@ -1,4 +1,6 @@
 from collections import defaultdict
+import skorch
+import matplotlib.pyplot as plt
 from scipy.stats import truncnorm
 from sklearn.manifold import TSNE
 from skorch.callbacks import EpochScoring
@@ -177,10 +179,28 @@ class Contextual_Coherency():
         e_actv, e_ctx, coherency_score = model_output
         coh_label = labels["coherency"]
         
-        context_loss = torch.norm(e_actv - e_ctx, 2)
-        coherency_loss = F.binary_cross_entropy(coherency_score, coh_label)
+        context_loss = torch.sum(torch.norm(e_actv - e_ctx, 2, dim=1))
+        coherency_loss = F.binary_cross_entropy(coherency_score, coh_label, reduction="sum")
         ctx_coh = (self.alpha * context_loss) + ((1 - self.alpha) * coherency_loss)
         return ctx_coh 
+
+
+class EpochPlot(skorch.callbacks.Callback):
+    def __init__(self, path, onlabel):
+        self.path = path
+        self.label = onlabel
+
+    @property
+    def __name__(self):
+        return f"{self.path}/{self.onlabel}.jpg"
+
+    def on_epoch_end(self, net, *args, **kwargs):
+        to_plot = { l: [h[l] for h in net.history_] for l in self.label }
+        plt.figure()
+        for k, v in to_plot.items():
+            plt.plot(v, label=k)
+        plt.legend()
+        plt.savefig(f"{self.path.absolute()}/{'_'.join(self.label)}.png")
 
 
 class Ts2VecScore():
@@ -268,7 +288,7 @@ class Ts2Vec(torch.nn.Module):
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
         super(Ts2LSTM2Vec, self).__init__() 
-        self.rnn = nn.RNN(input_size=36, hidden_size=128)
+        self.rnn = nn.RNN(input_size=36, hidden_size=128, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(128, 128),
             nn.ReLU(),
@@ -279,16 +299,14 @@ class Ts2LSTM2Vec(Ts2Vec):
             nn.Softmax())
     
     def toembedding(self, x):
-        x = x.permute(1, 0, 2)
         rnn_out, _ = self.rnn(x)
         e = self.embedder(rnn_out[-1])
         return e
 
     def forward(self, activity=None, context=None, coherency_activity=None):
         e_actv = self.toembedding(activity)
-        with torch.no_grad():
-            e_ctx = self.toembedding(context)
-            e_cohactv = self.toembedding(coherency_activity)
+        e_ctx = self.toembedding(context)
+        e_cohactv = self.toembedding(coherency_activity)
         e_comb = (e_actv + e_cohactv) / 2
         coherency = self.cohdiscr(e_comb)
         return (e_actv, e_ctx, coherency)

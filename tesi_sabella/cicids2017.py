@@ -241,6 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--outpath", "-o", help="Grid-search output file", type=Path, required=True)
     parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
     args = parser.parse_args()
+    args.outpath.mkdir(parents=True, exist_ok=True)
 
     # Data loading ..... # 
     if args.timeseries is not None: 
@@ -281,6 +282,7 @@ if __name__ == "__main__":
         callbacks=[
             coh_acc_tr, coh_rec_tr, coh_prec_tr,
             coh_acc_vl, coh_rec_vl, coh_prec_vl,
+            cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
             EarlyStopping("valid_loss", lower_is_better=True, patience=25)
         ])    
     grid_params = ParameterGrid({
@@ -325,7 +327,6 @@ if __name__ == "__main__":
     grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
     grid_res = grid_res.infer_objects()
 
-    args.outpath.mkdir(parents=True, exist_ok=True)
     grid_res.to_pickle(args.outpath/ "grid_results.pkl")
     torch.save(net.module_.state_dict(), args.outpath / "ts2vec.torch")
 
