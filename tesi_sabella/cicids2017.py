@@ -256,11 +256,11 @@ if __name__ == "__main__":
     
     X_train = cb.X2split_tensors(train_set["X"])
     Y_train = { k: train_set[k] for k in ["coherency", "attack"] }
-    cb.gpu_if_available(X_train, Y_train)
+    X_train, Y_train = cb.gpu_if_available(X_train, Y_train)
 
     X_test = cb.X2split_tensors(test_set["X"])
     Y_test = { k: test_set[k] for k in ["coherency", "attack"] }
-    cb.gpu_if_available(X_test, Y_test)
+    X_test, Y_test = cb.gpu_if_available(X_test, Y_test)
 
     # Scoring ..... #
     coh_acc_tr, coh_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency").epoch_score()
@@ -283,6 +283,7 @@ if __name__ == "__main__":
         callbacks=[
             coh_acc_tr, coh_rec_tr, coh_prec_tr,
             coh_acc_vl, coh_rec_vl, coh_prec_vl,
+            cb.DistPlot(args.outpath),
             cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
             EarlyStopping("valid_loss", lower_is_better=True, patience=25)
         ])    

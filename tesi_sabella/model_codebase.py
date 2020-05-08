@@ -27,6 +27,14 @@ CONTEXT_LEN = 28
 ACTIVITY_LEN = 14
 
 
+def plot_dict(d, fpath):
+    plt.figure()
+    for k, v in d.items():
+        plt.plot(v, label=k)
+    plt.legend()
+    plt.savefig(fpath)
+
+
 # ----- ----- DATA RESHAPING ----- ----- #
 # ----- ----- -------------- ----- ----- #
 class RNTrunc():
@@ -162,13 +170,12 @@ def X2tensor(X):
     ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
     return torch.tensor(ts_values).float()
 
-
-def gpu_if_available(X, Y):
+def gpu_if_available(X, Y={}):
     if torch.cuda.is_available():
-        tensors = list(X.values())
-        tensors.extend(Y.values())
-        for t in tensors:
-            t.cuda()
+        X_gpu = { k: v.cuda() for k, v in X.items() }
+        Y_gpu = { k: v.cuda() for k, v in Y.items() }
+        return X_gpu, Y_gpu
+    return X, Y
 
 
 # ----- ----- LOSSES/SCORING ----- ----- #
@@ -208,11 +215,39 @@ class EpochPlot(skorch.callbacks.Callback):
 
     def on_epoch_end(self, net, *args, **kwargs):
         to_plot = { l: [h[l] for h in net.history_] for l in self.label }
-        plt.figure()
-        for k, v in to_plot.items():
-            plt.plot(v, label=k)
-        plt.legend()
-        plt.savefig(f"{self.path.absolute()}/{'_'.join(self.label)}.png")
+        plot_dict(to_plot, f"{self.path.absolute()}/{'_'.join(self.label)}.png")
+
+
+class DistPlot(skorch.callbacks.Callback):
+    def __init__(self, path):
+        self.path = path
+
+    @property
+    def __name__(self):
+        return f"distance_visualization"
+
+    def on_train_begin(self, *args, **kwargs):
+        self.history = defaultdict(list)
+
+    def plot_dist(self, net, X, y, label):
+        with torch.no_grad():
+            e_actv, e_ctx, e_cohactv = net.forward(X)
+
+        emb_dist = torch.norm(e_actv - e_cohactv, p=2, dim=1)
+        # Coherent activity
+        coherent_idx = torch.where(y==COHERENT)[0]
+        coh_mean_dist = torch.mean(emb_dist[coherent_idx])
+        self.history["coherent_dist"].append(coh_mean_dist)
+        # Incoherent activity
+        incoh_idx = torch.where(y==INCOHERENT)[0]
+        incoh_mean_dist = torch.mean(emb_dist[incoh_idx])
+        self.history["incoherent_dist"].append(incoh_mean_dist)
+
+        plot_dict(self.history, f"{self.path.absolute()}/{label}_distances.png")
+
+    def on_epoch_end(self, net, dataset_train=None, dataset_valid=None):
+        self.plot_dist(net, dataset_train.X, dataset_train.y["coherency"], "train")
+        self.plot_dist(net, dataset_valid.X, dataset_valid.y["coherency"], "valid")
 
 
 class Ts2VecScore():
@@ -233,21 +268,23 @@ class Ts2VecScore():
                              name=f"valid_{self.__name__}")
         return es_tr, es_vl
 
-    def __call__(self, fsarg, X=None, y=None):
+    def __call__(self, fsarg, dset=None, y=None):
         # Extractor called
         if isinstance(fsarg, dict):
             return fsarg[self.label]
         # Scorer callback
+        X, _ = gpu_if_available(dset.X)
         with torch.no_grad():
             if self.label == "attack":
-                y_hat = fsarg.module_.context_anomaly(X.X["context"])
+                y_hat = fsarg.module_.context_anomaly(X["context"])
             else:
-                y_hat = fsarg.module_.activity_coherency(X.X["activity"], X.X["coherency_activity"])
+                y_hat = fsarg.module_.activity_coherency(X["activity"], X["coherency_activity"])
+            if y_hat.is_cuda:
+                y_hat = y_hat.cpu()
 
         y_cat = np.maximum(y, 0)
         y_hat_cat = np.round(y_hat)
         res = self.measure(y_cat, y_hat_cat)
-        import pdb; pdb.set_trace() 
         return res
 
 
