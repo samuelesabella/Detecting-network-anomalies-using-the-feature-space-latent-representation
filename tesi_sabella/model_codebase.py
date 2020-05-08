@@ -26,6 +26,9 @@ ATTACK_TRAFFIC = torch.tensor([ 1. ], dtype=torch.float32)
 CONTEXT_LEN = 28
 ACTIVITY_LEN = 14
 
+BETA_1 = .1
+BETA_2 = .4
+
 
 def plot_dict(d, fpath):
     plt.figure()
@@ -170,10 +173,10 @@ def X2tensor(X):
     ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
     return torch.tensor(ts_values).float()
 
-def gpu_if_available(X, Y={}):
+def gpu_if_available(X, Y=None):
     if torch.cuda.is_available():
         X_gpu = { k: v.cuda() for k, v in X.items() }
-        Y_gpu = { k: v.cuda() for k, v in Y.items() }
+        Y_gpu = { k: v.cuda() for k, v in Y.items() } if Y is not None else None
         return X_gpu, Y_gpu
     return X, Y
 
@@ -183,21 +186,18 @@ def gpu_if_available(X, Y={}):
 class Contextual_Coherency():
     def __init__(self, alpha=.3):
         self.alpha = alpha
-        self.beta_1 = .2
-        self.beta_2 = .4
 
     def __call__(self,  model_output, labels):
         e_actv, e_ctx, e_coh = model_output
         coh_label = labels["coherency"]
         
         ctx_dist = torch.norm((e_actv - e_ctx), p=2, dim=1)        
-        contextual_t = F.relu(ctx_dist - self.beta_1)
+        contextual_t = F.relu(ctx_dist - BETA_1)
 
-        mid_point = (e_actv + e_coh) / 2
-        mid_point_norm = torch.norm(mid_point, p=2, dim=1)
-        label_2_margin = - (coh_label - 1) / 2 # 0 if incoherent, 1 coherent 
-        coherency_t = (mid_point_norm * coh_label) + (self.beta_2 * label_2_margin) # Minimize if incoherent, maximize towards beta_2 if coherent
-        coherency_t = F.relu(coherency_t)
+        coh_dist = torch.norm((e_actv - e_coh), p=2, dim=1)
+        coh_dist_sign = (-coh_label) * coh_dist
+        beta = ((-BETA_1) * ((coh_label - 1) / 2)) + (BETA_2 * ((coh_label + 1) / 2))
+        coherency_t = F.relu(coh_dist_sign + beta)
         
         ctx_coh = (self.alpha * contextual_t) + ((1 - self.alpha) * coherency_t)
         
@@ -355,10 +355,8 @@ class Ts2LSTM2Vec(Ts2Vec):
         e_a1 = self.toembedding(a1)
         e_a2 = self.toembedding(a2)
 
-        mid_point = (e_a1 + e_a2) / 2
-        mid_point_norm = torch.norm(mid_point, p=2, dim=1)
-        incoherence = F.relu(1. - mid_point_norm)
-        return incoherence
+        dist = torch.norm(e_a1 - e_a2, p=2, dim=1) / BETA_2
+        return torch.clamp(dist, 0., 1.)
 
     def toembedding(self, x):
         rnn_out, _ = self.rnn(x)
