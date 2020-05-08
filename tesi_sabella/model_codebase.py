@@ -4,6 +4,7 @@ from sklearn.manifold import TSNE
 from skorch.callbacks import EpochScoring
 from tqdm import tqdm
 import math
+import matplotlib.pyplot as plt
 import more_itertools as mit
 import numpy as np
 import pandas as pd
@@ -15,12 +16,12 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-import matplotlib.pyplot as plt
 
-COHERENT = torch.tensor([1., 0.], dtype=torch.float32)
-INCOHERENT = torch.tensor([0., 1.], dtype=torch.float32)
-NORMAL_TRAFFIC = torch.tensor([1., 0.], dtype=torch.float32)
-ATTACK_TRAFFIC = torch.tensor([0., 1.], dtype=torch.float32) 
+
+COHERENT = torch.tensor([ -1. ], dtype=torch.float32)
+INCOHERENT = torch.tensor([ 1. ], dtype=torch.float32) 
+NORMAL_TRAFFIC = torch.tensor([ -1. ], dtype=torch.float32)
+ATTACK_TRAFFIC = torch.tensor([ 1. ], dtype=torch.float32) 
 
 CONTEXT_LEN = 28
 ACTIVITY_LEN = 14
@@ -175,15 +176,25 @@ def gpu_if_available(X, Y):
 class Contextual_Coherency():
     def __init__(self, alpha=.3):
         self.alpha = alpha
+        self.beta_1 = .2
+        self.beta_2 = .4
 
     def __call__(self,  model_output, labels):
-        e_actv, e_ctx, coherency_score = model_output
+        e_actv, e_ctx, e_coh = model_output
         coh_label = labels["coherency"]
         
-        context_loss = torch.sum(torch.norm(e_actv - e_ctx, 2, dim=1))
-        coherency_loss = F.binary_cross_entropy(coherency_score, coh_label, reduction="sum")
-        ctx_coh = (self.alpha * context_loss) + ((1 - self.alpha) * coherency_loss)
-        return ctx_coh 
+        ctx_dist = torch.norm((e_actv - e_ctx), p=2, dim=1)        
+        contextual_t = F.relu(ctx_dist - self.beta_1)
+
+        mid_point = (e_actv + e_coh) / 2
+        mid_point_norm = torch.norm(mid_point, p=2, dim=1)
+        label_2_margin = - (coh_label - 1) / 2 # 0 if incoherent, 1 coherent 
+        coherency_t = (mid_point_norm * coh_label) + (self.beta_2 * label_2_margin) # Minimize if incoherent, maximize towards beta_2 if coherent
+        coherency_t = F.relu(coherency_t)
+        
+        ctx_coh = (self.alpha * contextual_t) + ((1 - self.alpha) * coherency_t)
+        
+        return torch.mean(ctx_coh) 
 
 
 class EpochPlot(skorch.callbacks.Callback):
@@ -231,11 +242,12 @@ class Ts2VecScore():
             if self.label == "attack":
                 y_hat = fsarg.module_.context_anomaly(X.X["context"])
             else:
-                _, _, y_hat = fsarg.forward(X)
+                y_hat = fsarg.module_.activity_coherency(X.X["activity"], X.X["coherency_activity"])
 
-        y_cat = np.argmax(y, axis=1)
-        y_hat_cat = np.argmax(np.round(y_hat), axis=1)
+        y_cat = np.maximum(y, 0)
+        y_hat_cat = np.round(y_hat)
         res = self.measure(y_cat, y_hat_cat)
+        import pdb; pdb.set_trace() 
         return res
 
 
@@ -289,26 +301,37 @@ class Ts2Vec(torch.nn.Module):
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
         super(Ts2LSTM2Vec, self).__init__() 
-        self.rnn = nn.RNN(input_size=36, hidden_size=128, batch_first=True)
+        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)#256, num_layers=3, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(128, 128),
+            nn.Linear(80, 128),# 256, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU())
-        self.cohdiscr = nn.Sequential(
-            nn.Linear(128, 2),
-            nn.Softmax())
-    
+   
+    def context_anomaly(self, ctx):
+        a1 = ctx[:, :ACTIVITY_LEN]
+        a2 = ctx[:, ACTIVITY_LEN:]
+        return self.activity_coherency(a1, a2)
+
+    def activity_coherency(self, a1, a2):
+        # 1. => incoherent, 0. => coherent
+        e_a1 = self.toembedding(a1)
+        e_a2 = self.toembedding(a2)
+
+        mid_point = (e_a1 + e_a2) / 2
+        mid_point_norm = torch.norm(mid_point, p=2, dim=1)
+        incoherence = F.relu(1. - mid_point_norm)
+        return incoherence
+
     def toembedding(self, x):
         rnn_out, _ = self.rnn(x)
         e = self.embedder(rnn_out[:, -1])
+        e = F.normalize(e, p=2, dim=1)
         return e
 
     def forward(self, activity=None, context=None, coherency_activity=None):
         e_actv = self.toembedding(activity)
         e_ctx = self.toembedding(context)
         e_cohactv = self.toembedding(coherency_activity)
-        e_comb = (e_actv + e_cohactv) / 2
-        coherency = self.cohdiscr(e_comb)
-        return (e_actv, e_ctx, coherency)
+        return (e_actv, e_ctx, e_cohactv)
 

@@ -159,16 +159,17 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- ----------- ----- ----- #
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
+    overl = .85
     
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
-    train_set = cb.ts_windowing(df_train)
+    train_set = cb.ts_windowing(df_train, overlapping=overl)
 
     test_set = defaultdict(list)
     for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day, update=False)
-        test_day = cb.ts_windowing(df_day_preproc)
+        test_day = cb.ts_windowing(df_day_preproc, overlapping=overl)
         
         attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].unique()
         normal_rows = torch.where(test_day["attack"] == cb.NORMAL_TRAFFIC)[0].unique()
@@ -276,7 +277,7 @@ if __name__ == "__main__":
         cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
         optimizer=torch.optim.Adam, 
-        batch_size=32,        
+        batch_size=64,        
         device=dev,
         train_split=None,
         callbacks=[
@@ -286,7 +287,7 @@ if __name__ == "__main__":
             EarlyStopping("valid_loss", lower_is_better=True, patience=25)
         ])    
     grid_params = ParameterGrid({
-        "lr": [ .001, .01 ],
+        "lr": [ .0001 ],
         "max_epochs": [ 1200 ],
     })
 
