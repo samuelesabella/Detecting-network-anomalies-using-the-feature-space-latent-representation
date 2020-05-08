@@ -159,7 +159,7 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- ----------- ----- ----- #
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
-    overl = .85
+    overl = .95
     
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
