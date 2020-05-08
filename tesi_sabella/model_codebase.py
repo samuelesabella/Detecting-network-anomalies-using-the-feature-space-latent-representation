@@ -188,20 +188,14 @@ class Contextual_Coherency():
         self.alpha = alpha
 
     def __call__(self,  model_output, labels):
-        e_actv, e_ctx, e_coh = model_output
+        e_actv, e_coh = model_output
         coh_label = labels["coherency"]
-        
-        ctx_dist = torch.norm((e_actv - e_ctx), p=2, dim=1)        
-        contextual_t = F.relu(ctx_dist - BETA_1)
 
         coh_dist = torch.norm((e_actv - e_coh), p=2, dim=1)
         coh_dist_sign = (-coh_label) * coh_dist
         beta = ((-BETA_1) * ((coh_label - 1) / 2)) + (BETA_2 * ((coh_label + 1) / 2))
         coherency_t = F.relu(coh_dist_sign + beta)
-        
-        ctx_coh = (self.alpha * contextual_t) + ((1 - self.alpha) * coherency_t)
-        
-        return torch.mean(ctx_coh) 
+        return torch.mean(coherency_t)
 
 
 class EpochPlot(skorch.callbacks.Callback):
@@ -231,18 +225,20 @@ class DistPlot(skorch.callbacks.Callback):
 
     def plot_dist(self, net, X, y, label):
         with torch.no_grad():
-            e_actv, e_ctx, e_cohactv = net.forward(X)
+            e_actv, e_cohactv = net.forward(X)
         y = y.cpu()
         emb_dist = torch.norm(e_actv - e_cohactv, p=2, dim=1).cpu()
         # Coherent activity
         coherent_idx = torch.where(y==COHERENT)[0]
         coh_mean_dist = torch.mean(emb_dist[coherent_idx])
-        self.history["coherent_dist"].append(coh_mean_dist)
+        self.history[f"coherent_dist_{label}"].append(coh_mean_dist)
         # Incoherent activity
         incoh_idx = torch.where(y==INCOHERENT)[0]
         incoh_mean_dist = torch.mean(emb_dist[incoh_idx])
-        self.history["incoherent_dist"].append(incoh_mean_dist)
+        self.history[f"incoherent_dist_{label}"].append(incoh_mean_dist)
 
+        keys = [f"coherent_dist_{label}", f"incoherent_dist_{label}"]
+        to_plot = { k: v for k, v in self.history.items() if k in keys }
         plot_dict(self.history, f"{self.path.absolute()}/{label}_distances.png")
 
     def on_epoch_end(self, net, dataset_train=None, dataset_valid=None):
@@ -366,7 +362,6 @@ class Ts2LSTM2Vec(Ts2Vec):
 
     def forward(self, activity=None, context=None, coherency_activity=None):
         e_actv = self.toembedding(activity)
-        e_ctx = self.toembedding(context)
         e_cohactv = self.toembedding(coherency_activity)
-        return (e_actv, e_ctx, e_cohactv)
+        return (e_actv, e_cohactv) 
 
