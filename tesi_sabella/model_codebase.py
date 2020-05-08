@@ -232,8 +232,8 @@ class DistPlot(skorch.callbacks.Callback):
     def plot_dist(self, net, X, y, label):
         with torch.no_grad():
             e_actv, e_ctx, e_cohactv = net.forward(X)
-
-        emb_dist = torch.norm(e_actv - e_cohactv, p=2, dim=1)
+        y = y.cpu()
+        emb_dist = torch.norm(e_actv - e_cohactv, p=2, dim=1).cpu()
         # Coherent activity
         coherent_idx = torch.where(y==COHERENT)[0]
         coh_mean_dist = torch.mean(emb_dist[coherent_idx])
@@ -271,7 +271,7 @@ class Ts2VecScore():
     def __call__(self, fsarg, dset=None, y=None):
         # Extractor called
         if isinstance(fsarg, dict):
-            return fsarg[self.label]
+            return fsarg[self.label].cpu()
         # Scorer callback
         X, _ = gpu_if_available(dset.X)
         with torch.no_grad():
