@@ -65,11 +65,21 @@ def coherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_win
         context_windows: list of all the context windows
     """
     r = random.random()
-    # if r < .25: # Sample from the current context
-    #     return (context_windows[ctx_idx], COHERENT)
-    # if r < .5 and next_ctx_idx < len(context_windows): # Sample from the context of the next activity
-    #     ctx_b = context_windows[next_ctx_idx]
-    #     return (ctx_b, COHERENT)
+    if r < .5 and next_ctx_idx < len(context_windows): # Sample from the context of the next activity
+        ctx_b = context_windows[next_ctx_idx]
+        return ctx_b
+    else: # Sample from the current context
+        return context_windows[ctx_idx]
+
+
+def incoherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_windows):
+    """
+        ctx_idx: current context index 
+        next_ctx_idx: index of the successive context with no samples in common with the current one
+        coherency_bounds: tuple <lbound, rbound> the boundaries of the coherent range
+        context_windows: list of all the context windows
+    """
+    r = random.random()
     if r < .5: # Sample context distant in time
         shift_direction = True if random.random() > 0 else False
         lbound, rbound = coherency_bounds
@@ -80,12 +90,12 @@ def coherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_win
             # sample context after
             random_shift = random.randint(rbound, len(context_windows) - 1)
         x_b = context_windows[random_shift]
-        return (x_b, INCOHERENT)
-    return (None, INCOHERENT) # Sample from full dataset
+        return x_b
+    return None # Sample from full dataset
 
 
 def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN, 
-        overlapping=.95, consistency_range=240, pick_coherent_activity=True):
+        overlapping=.95, consistency_range=240):
     """
         ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
         actv_len  --  activity window length, 7 minutes
@@ -106,61 +116,62 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
         actv_wnds = map(lambda x: random_sublist(x, actv_len), ctx_wnds_values)
 
         # Coherency and training tuple generation ...... #
-        def coh_aus(i):
+        def compute_bounds(i):
             next_ctx = i + int(ctx_len / window_stepsize)
             next_incoherent = i + inconsistency_steps
             prev_incoherent = i - inconsistency_steps 
             coherence_bounds = (prev_incoherent, next_incoherent)
-            return coherent_context_picker(i, next_ctx, coherence_bounds, ctx_wnds_values) 
-        coherent_contexts = map(coh_aus, range(len(ctx_wnds_values)))
-        h_samples = zip(ctx_wnds_values, actv_wnds, coherent_contexts)
-        for ctx, activity, (coh_ctx, coh_label) in h_samples:
-            samples["activity"].append(activity)
-            samples["context"].append(ctx)
-            # Need host information to pick samples from different host
-            coh_info = host if coh_ctx is None else coh_ctx 
-            samples["coherency_context"].append(coh_info)
+            return (i, next_ctx, coherence_bounds, ctx_wnds_values) 
 
-            samples["coherency"].append(coh_label)
-            if "attack" in ctx:
-                ctx_attack = NORMAL_TRAFFIC if (ctx["attack"]=="none").all() else ATTACK_TRAFFIC
-                samples["attack"].append(ctx_attack)
+        ctx_wnds_len = len(ctx_wnds_values)
+        coherent_contexts = map(lambda i: coherent_context_picker(*compute_bounds(i)), range(ctx_wnds_len))
+        coherent_activity = map(lambda x: random_sublist(x, actv_len), coherent_contexts)
+        incoherent_contexts = map(lambda i: incoherent_context_picker(*compute_bounds(i)), range(ctx_wnds_len))
+
+        h_samples = zip(actv_wnds, ctx_wnds_values, coherent_activity, incoherent_contexts)
+        for a, ctx, coh_a, incoh_ctx in h_samples:
+            samples["activity"].append(a)
+            samples["context"].append(ctx)
+            samples["coherent_activity"].append(coh_a)
+            # Need host information to pick samples from different host
+            incoh_info = host if incoh_ctx is None else incoh_ctx
+            samples["incoherent_context"].append(incoh_info)
             
+            ctx_attack = NORMAL_TRAFFIC if (ctx["attack"]=="none").all() else ATTACK_TRAFFIC
+            samples["attack"].append(ctx_attack)
+  
     # Picking random coherency contexts ..... #
     def coh_ctx_to_activity(x):
         # Sampling series from different host
         while isinstance(x, str):
-            rctx = random.choice(samples["context"])
-            coh_host = rctx.index.get_level_values("host")[0]
+            r_ctx = random.choice(samples["context"])
+            coh_host = r_ctx.index.get_level_values("host")[0]
             if coh_host != x:
-                x = rctx
-        if pick_coherent_activity:
-            return random_sublist(x, actv_len)
-        return x
+                x = r_ctx
+        return x 
     logging.debug("Generating coherent activities")
-    samples["coherency_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["coherency_context"])))
-    del samples["coherency_context"]
+    samples["incoherent_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["incoherent_context"])))
+    del samples["incoherent_context"]
     
     # Merging data frames ..... #
     logging.debug("Merging dataframes")
-    samples_len = len(samples["context"])
-    context_samples = pd.concat(samples["context"], keys=range(samples_len), names=["sample_idx"])
-    del samples["context"]
+    samples_len = len(samples["activity"])
     activity_samples = pd.concat(samples["activity"], keys=range(samples_len), names=["sample_idx"])
     del samples["activity"]
-    coherency_activity_samples = pd.concat(samples["coherency_activity"], keys=range(samples_len), names=["sample_idx"])
-    del samples["coherency_activity"]
+    context_samples = pd.concat(samples["context"], keys=range(samples_len), names=["sample_idx"])
+    del samples["context"]
+    coherent_samples = pd.concat(samples["coherent_activity"], keys=range(samples_len), names=["sample_idx"])
+    del samples["coherent_activity"]
+    incoherent_samples = pd.concat(samples["incoherent_activity"], keys=range(samples_len), names=["sample_idx"])
+    del samples["incoherent_activity"]
 
     samples["X"] = pd.concat(
-        [activity_samples, context_samples, coherency_activity_samples], 
-        keys=["activity", "context", "coherency_activity"], names=["model_input"])
+        [activity_samples, context_samples, coherent_samples, incoherent_samples], 
+        keys=["activity", "context", "anchor_positive", "anchor_negative"], names=["model_input"])
     samples["X"].reset_index(level=["host", "_time", "device_category"], inplace=True)
     samples["X"] = samples["X"].swaplevel(0, 1)
 
-    # Concatenating labels ..... #
-    if "attack" in samples:
-        samples["attack"] = torch.stack(samples["attack"])
-    samples["coherency"] = torch.stack(samples["coherency"])
+    samples["attack"] = torch.stack(samples["attack"])
 
     return samples
 
@@ -177,7 +188,7 @@ def X2tensor(X):
 def gpu_if_available(X, Y=None):
     if torch.cuda.is_available():
         X_gpu = { k: v.cuda() for k, v in X.items() }
-        Y_gpu = { k: v.cuda() for k, v in Y.items() } if Y is not None else None
+        Y_gpu = Y.cuda() if Y is not None else None
         return X_gpu, Y_gpu
     return X, Y
 
@@ -189,11 +200,11 @@ class Contextual_Coherency():
         self.alpha = alpha
 
     def __call__(self,  model_output, labels):
-        e_actv, e_ctx, e_coh = model_output
+        e_actv, e_ap, e_an = model_output
 
-        coh_dist = F.relu(torch.norm((e_actv - e_ctx), p=2, dim=1) - BETA_1)
-        inco_dist = F.relu(BETA_2 - torch.norm((e_actv - e_coh), p=2, dim=1))
-        return torch.mean(coh_dist + inco_dist)
+        ap_dist = F.relu(torch.norm((e_actv - e_ap), p=2, dim=1) - BETA_1)
+        an_dist = F.relu(BETA_2 - torch.norm((e_actv - e_an), p=2, dim=1))
+        return torch.mean(ap_dist + an_dist)
 
 
 class EpochPlot(skorch.callbacks.Callback):
@@ -221,16 +232,15 @@ class DistPlot(skorch.callbacks.Callback):
     def on_train_begin(self, *args, **kwargs):
         self.history = defaultdict(list)
 
-    def plot_dist(self, net, X, y, label):
+    def plot_dist(self, net, X, label):
         with torch.no_grad():
-            e_actv, e_ctx, e_cohactv = net.forward(X)
-        y = y.cpu()
+            e_actv, e_coh, e_incoh = net.forward(X)
         # Coherent activity
-        coh_dist = torch.norm((e_actv - e_ctx), p=2, dim=1).cpu()
+        coh_dist = torch.norm((e_actv - e_coh), p=2, dim=1).cpu()
         coh_mean_dist = torch.mean(coh_dist)
         self.history[f"coherent_dist_{label}"].append(coh_mean_dist)
         # Incoherent activity
-        incoh_dist = torch.norm((e_actv - e_cohactv), p=2, dim=1).cpu()
+        incoh_dist = torch.norm((e_actv - e_incoh), p=2, dim=1).cpu()
         incoh_mean_dist = torch.mean(incoh_dist)
         self.history[f"incoherent_dist_{label}"].append(incoh_mean_dist)
 
@@ -239,8 +249,8 @@ class DistPlot(skorch.callbacks.Callback):
         plot_dict(to_plot, f"{self.path.absolute()}/{label}_distances.png")
 
     def on_epoch_end(self, net, dataset_train=None, dataset_valid=None):
-        self.plot_dist(net, dataset_train.X, dataset_train.y["coherency"], "train")
-        self.plot_dist(net, dataset_valid.X, dataset_valid.y["coherency"], "valid")
+        self.plot_dist(net, dataset_train.X, "train")
+        self.plot_dist(net, dataset_valid.X, "valid")
 
 
 class Ts2VecScore():
@@ -268,10 +278,7 @@ class Ts2VecScore():
         # Scorer callback
         X, _ = dset.X
         with torch.no_grad():
-            if self.label == "attack":
-                y_hat = fsarg.module_.context_anomaly(X["context"])
-            else:
-                y_hat = fsarg.module_.activity_coherency(X["activity"], X["coherency_activity"])
+            y_hat = fsarg.module_.context_anomaly(X["context"])
             if y_hat.is_cuda:
                 y_hat = y_hat.cpu()
 
@@ -357,9 +364,9 @@ class Ts2LSTM2Vec(Ts2Vec):
         e = F.normalize(e, p=2, dim=1)
         return e
 
-    def forward(self, activity=None, context=None, coherency_activity=None):
+    def forward(self, activity=None, context=None, anchor_positive=None, anchor_negative=None):
         e_actv = self.toembedding(activity)
-        e_context = self.toembedding(context)
-        e_cohactv = self.toembedding(coherency_activity)
-        return (e_actv, e_context, e_cohactv) 
+        e_ap = self.toembedding(anchor_positive)
+        e_an = self.toembedding(anchor_negative)
+        return (e_actv, e_ap, e_an) 
 

@@ -160,6 +160,7 @@ class CICIDS2017(generator.FluxDataGenerator):
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
     overl = .90
+    sample_activity = True
     
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
@@ -177,11 +178,9 @@ def prepare_dataset(df):
 
         sampled_rows = np.concatenate([normal_rows, attacks_rows])
         sample_df = test_day["X"].loc[sampled_rows]
-        sample_coh_label = test_day["coherency"][sampled_rows]
         sample_attack_label = test_day["attack"][sampled_rows]
 
         test_set["X"].append(sample_df)
-        test_set["coherency"].append(sample_coh_label)
         test_set["attack"].append(sample_attack_label)
     
     # Resetting sample indexes for test set
@@ -194,7 +193,6 @@ def prepare_dataset(df):
     test_set["X"].drop(columns=["sample_idx"], inplace=True)
     
     # concatenating labels 
-    test_set["coherency"] = torch.cat(test_set["coherency"])
     test_set["attack"] = torch.cat(test_set["attack"])
 
     return train_set, test_set
@@ -255,18 +253,13 @@ if __name__ == "__main__":
         test_set = load_dataset(args.dataset / "model_test")
     
     X_train = cb.X2split_tensors(train_set["X"])
-    Y_train = { k: train_set[k] for k in ["coherency", "attack"] }
-    X_train, Y_train = cb.gpu_if_available(X_train, Y_train)
+    X_train, _ = cb.gpu_if_available(X_train)
 
     X_test = cb.X2split_tensors(test_set["X"])
-    Y_test = { k: test_set[k] for k in ["coherency", "attack"] }
+    Y_test = test_set["attack"] 
     X_test, Y_test = cb.gpu_if_available(X_test, Y_test)
 
     # Scoring ..... #
-    # coh_acc_tr, coh_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency").epoch_score()
-    # coh_rec_tr, coh_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "coherency").epoch_score()
-    # coh_prec_tr, coh_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "coherency").epoch_score()
-
     # attack_acc_tr, attack_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "attack").epoch_score()
     # attack_rec_tr, attack_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "attack").epoch_score()
     # attack_prec_tr, attack_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "attack").epoch_score()
@@ -299,16 +292,13 @@ if __name__ == "__main__":
         print(params)
         setparams(net, params) 
         # Kfold fitting 
-        for train_index, vl_index in kf.split(Y_train["coherency"]):
+        for train_index, vl_index in kf.split(X_train["activity"]):
             X_cv_train = { k: v[train_index, :] for k, v in X_train.items() }
-            Y_cv_train = { k: v[train_index, :] for k, v in Y_train.items() }
-
             X_cv_vl = { k: v[vl_index, :] for k, v in X_train.items() }
-            Y_cv_vl = { k: v[vl_index, :] for k, v in Y_train.items() }
-            cv_validation = Dataset(X_cv_vl, Y_cv_vl)
+            cv_validation = Dataset(X_cv_vl)
 
             net.train_split = predefined_split(cv_validation)
-            fmodel = net.fit(X_cv_train, Y_cv_train)
+            fmodel = net.fit(X_cv_train)
             grid_res = pd.concat([grid_res, last_res_dframe(fmodel, params)])
     grid_res = grid_res.infer_objects()
 
@@ -323,7 +313,7 @@ if __name__ == "__main__":
     setparams(net, best_params)
     test_set = Dataset(X_test, Y_test)
     net.train_split = predefined_split(test_set)
-    best_refit = net.fit(X_train, Y_train)
+    best_refit = net.fit(X_train)
     best_refit_res = last_res_dframe(best_refit, best_params) 
     best_refit_res["best_refit"] = True
     grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
