@@ -157,20 +157,30 @@ class CICIDS2017(generator.FluxDataGenerator):
 
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
+KFOLD_SPLITS = 5
+MAX_EPOCHS = 1500 
+PATIENCE = 75
+BATCH_SIZE = 32
+WINDOW_OVERLAPPING = .90
+
+grid_params = ParameterGrid({
+    "lr": [ .0001, .1 ],
+    "max_epochs": [ MAX_EPOCHS ],
+})
+
+
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
-    overl = .90
-    sample_activity = True
     
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
-    train_set = cb.ts_windowing(df_train, overlapping=overl)
+    train_set = cb.ts_windowing(df_train, overlapping=WINDOW_OVERLAPPING)
 
     test_set = defaultdict(list)
     for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day, update=False)
-        test_day = cb.ts_windowing(df_day_preproc, overlapping=overl)
+        test_day = cb.ts_windowing(df_day_preproc, overlapping=WINDOW_OVERLAPPING)
         
         attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].unique()
         normal_rows = torch.where(test_day["attack"] == cb.NORMAL_TRAFFIC)[0].unique()
@@ -265,12 +275,12 @@ if __name__ == "__main__":
     # attack_prec_tr, attack_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "attack").epoch_score()
 
     # Grid hyperparams ..... #
-    kf = KFold(n_splits=2, shuffle=True, random_state=SEED)
+    kf = KFold(n_splits=KFOLD_SPLITS, shuffle=True, random_state=SEED)
     net = NeuralNet(
         cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
         optimizer=torch.optim.Adam, 
-        batch_size=64,        
+        batch_size=BATCH_SIZE,        
         device=dev,
         train_split=None,
         callbacks=[
@@ -278,12 +288,8 @@ if __name__ == "__main__":
             # coh_acc_vl, coh_rec_vl, coh_prec_vl,
             cb.DistPlot(args.outpath),
             cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
-            EarlyStopping("valid_loss", lower_is_better=True, patience=25)
+            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
-    grid_params = ParameterGrid({
-        "lr": [ .0001, .1 ],
-        "max_epochs": [ 1 ],
-    })
 
     # Grid search ..... #
     logging.debug("Starting grid search")
