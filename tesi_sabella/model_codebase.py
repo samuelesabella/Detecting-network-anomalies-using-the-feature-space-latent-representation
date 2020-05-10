@@ -118,8 +118,8 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
         # Coherency and training tuple generation ...... #
         def compute_bounds(i):
             next_ctx = i + int(ctx_len / window_stepsize)
-            next_incoherent = i + inconsistency_steps
-            prev_incoherent = i - inconsistency_steps 
+            next_incoherent = i + inconsistency_steps + 1
+            prev_incoherent = i - inconsistency_steps - 1
             coherence_bounds = (prev_incoherent, next_incoherent)
             return (i, next_ctx, coherence_bounds, ctx_wnds_values) 
 
@@ -148,7 +148,7 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
             coh_host = r_ctx.index.get_level_values("host")[0]
             if coh_host != x:
                 x = r_ctx
-        return x 
+        return random_sublist(x, actv_len)
     logging.debug("Generating coherent activities")
     samples["incoherent_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["incoherent_context"])))
     del samples["incoherent_context"]
