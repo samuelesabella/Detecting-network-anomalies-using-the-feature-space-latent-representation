@@ -159,7 +159,7 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- ----------- ----- ----- #
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
-    overl = .95
+    overl = .90
     
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
@@ -263,16 +263,16 @@ if __name__ == "__main__":
     X_test, Y_test = cb.gpu_if_available(X_test, Y_test)
 
     # Scoring ..... #
-    coh_acc_tr, coh_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency").epoch_score()
-    coh_rec_tr, coh_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "coherency").epoch_score()
-    coh_prec_tr, coh_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "coherency").epoch_score()
+    # coh_acc_tr, coh_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency").epoch_score()
+    # coh_rec_tr, coh_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "coherency").epoch_score()
+    # coh_prec_tr, coh_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "coherency").epoch_score()
 
-    attack_acc_tr, attack_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "attack").epoch_score()
-    attack_rec_tr, attack_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "attack").epoch_score()
-    attack_prec_tr, attack_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "attack").epoch_score()
+    # attack_acc_tr, attack_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "attack").epoch_score()
+    # attack_rec_tr, attack_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "attack").epoch_score()
+    # attack_prec_tr, attack_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "attack").epoch_score()
 
     # Grid hyperparams ..... #
-    kf = KFold(n_splits=5, shuffle=True, random_state=SEED)
+    kf = KFold(n_splits=2, shuffle=True, random_state=SEED)
     net = NeuralNet(
         cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
@@ -281,15 +281,15 @@ if __name__ == "__main__":
         device=dev,
         train_split=None,
         callbacks=[
-            coh_acc_tr, coh_rec_tr, coh_prec_tr,
-            coh_acc_vl, coh_rec_vl, coh_prec_vl,
+            # coh_acc_tr, coh_rec_tr, coh_prec_tr,
+            # coh_acc_vl, coh_rec_vl, coh_prec_vl,
             cb.DistPlot(args.outpath),
             cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
             EarlyStopping("valid_loss", lower_is_better=True, patience=25)
         ])    
     grid_params = ParameterGrid({
-        "lr": [ .0001 ],
-        "max_epochs": [ 1200 ],
+        "lr": [ .0001, .1 ],
+        "max_epochs": [ 1 ],
     })
 
     # Grid search ..... #
@@ -313,13 +313,13 @@ if __name__ == "__main__":
     grid_res = grid_res.infer_objects()
 
     # Get best configuration ..... #
-    grid_best_choice = "valid_coherency__accuracy_score"
+    grid_best_choice = "valid_loss"
     hyperpar_cols = [c for c in grid_res.columns if "hyperparam" in c]
     grid_mean = grid_res.groupby(hyperpar_cols)[grid_best_choice].mean()
     best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
     
     # Retrain on whole dataset ..... #
-    net.callbacks.extend([attack_acc_tr, attack_acc_vl])
+    # net.callbacks.extend([attack_acc_tr, attack_acc_vl])
     setparams(net, best_params)
     test_set = Dataset(X_test, Y_test)
     net.train_split = predefined_split(test_set)

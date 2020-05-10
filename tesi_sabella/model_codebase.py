@@ -23,10 +23,10 @@ INCOHERENT = torch.tensor([ 1. ], dtype=torch.float32)
 NORMAL_TRAFFIC = torch.tensor([ -1. ], dtype=torch.float32)
 ATTACK_TRAFFIC = torch.tensor([ 1. ], dtype=torch.float32) 
 
-CONTEXT_LEN = 28
-ACTIVITY_LEN = 14
+CONTEXT_LEN = 56
+ACTIVITY_LEN = 28
 
-BETA_1 = .1
+BETA_1 = .2
 BETA_2 = .4
 
 
@@ -65,15 +65,15 @@ def coherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_win
         context_windows: list of all the context windows
     """
     r = random.random()
-    if r < .25: # Sample from the current context
-        return (context_windows[ctx_idx], COHERENT)
-    if r < .5 and next_ctx_idx < len(context_windows): # Sample from the context of the next activity
-        ctx_b = context_windows[next_ctx_idx]
-        return (ctx_b, COHERENT)
-    if r < .75: # Sample context distant in time
+    # if r < .25: # Sample from the current context
+    #     return (context_windows[ctx_idx], COHERENT)
+    # if r < .5 and next_ctx_idx < len(context_windows): # Sample from the context of the next activity
+    #     ctx_b = context_windows[next_ctx_idx]
+    #     return (ctx_b, COHERENT)
+    if r < .5: # Sample context distant in time
         shift_direction = True if random.random() > 0 else False
         lbound, rbound = coherency_bounds
-        if lbound > 0 and (rbound > len(context_windows) or shift_direction):
+        if lbound > 0 and (rbound > len(context_windows)-1 or shift_direction):
             # sample context before
             random_shift = random.randint(0, lbound)
         else:
@@ -94,6 +94,7 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
     """
     samples = defaultdict(list)
     window_stepsize = max(int(ctx_len * (1 - overlapping)), 1) 
+    inconsistency_steps = math.ceil(consistency_range / window_stepsize)
 
     logging.debug("Windowing time series for each host")
     host_ts = df.groupby(level=['device_category', 'host'])
@@ -107,8 +108,8 @@ def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN,
         # Coherency and training tuple generation ...... #
         def coh_aus(i):
             next_ctx = i + int(ctx_len / window_stepsize)
-            next_incoherent = i + math.ceil(consistency_range / window_stepsize)
-            prev_incoherent = i - consistency_range
+            next_incoherent = i + inconsistency_steps
+            prev_incoherent = i - inconsistency_steps 
             coherence_bounds = (prev_incoherent, next_incoherent)
             return coherent_context_picker(i, next_ctx, coherence_bounds, ctx_wnds_values) 
         coherent_contexts = map(coh_aus, range(len(ctx_wnds_values)))
@@ -188,14 +189,11 @@ class Contextual_Coherency():
         self.alpha = alpha
 
     def __call__(self,  model_output, labels):
-        e_actv, e_coh = model_output
-        coh_label = labels["coherency"]
+        e_actv, e_ctx, e_coh = model_output
 
-        coh_dist = torch.norm((e_actv - e_coh), p=2, dim=1)
-        coh_dist_sign = (-coh_label) * coh_dist
-        beta = ((-BETA_1) * ((coh_label - 1) / 2)) + (BETA_2 * ((coh_label + 1) / 2))
-        coherency_t = F.relu(coh_dist_sign + beta)
-        return torch.mean(coherency_t)
+        coh_dist = F.relu(torch.norm((e_actv - e_ctx), p=2, dim=1) - BETA_1)
+        inco_dist = F.relu(BETA_2 - torch.norm((e_actv - e_coh), p=2, dim=1))
+        return torch.mean(coh_dist + inco_dist)
 
 
 class EpochPlot(skorch.callbacks.Callback):
@@ -225,21 +223,20 @@ class DistPlot(skorch.callbacks.Callback):
 
     def plot_dist(self, net, X, y, label):
         with torch.no_grad():
-            e_actv, e_cohactv = net.forward(X)
+            e_actv, e_ctx, e_cohactv = net.forward(X)
         y = y.cpu()
-        emb_dist = torch.norm(e_actv - e_cohactv, p=2, dim=1).cpu()
         # Coherent activity
-        coherent_idx = torch.where(y==COHERENT)[0]
-        coh_mean_dist = torch.mean(emb_dist[coherent_idx])
+        coh_dist = torch.norm((e_actv - e_ctx), p=2, dim=1).cpu()
+        coh_mean_dist = torch.mean(coh_dist)
         self.history[f"coherent_dist_{label}"].append(coh_mean_dist)
         # Incoherent activity
-        incoh_idx = torch.where(y==INCOHERENT)[0]
-        incoh_mean_dist = torch.mean(emb_dist[incoh_idx])
+        incoh_dist = torch.norm((e_actv - e_cohactv), p=2, dim=1).cpu()
+        incoh_mean_dist = torch.mean(incoh_dist)
         self.history[f"incoherent_dist_{label}"].append(incoh_mean_dist)
 
         keys = [f"coherent_dist_{label}", f"incoherent_dist_{label}"]
         to_plot = { k: v for k, v in self.history.items() if k in keys }
-        plot_dict(self.history, f"{self.path.absolute()}/{label}_distances.png")
+        plot_dict(to_plot, f"{self.path.absolute()}/{label}_distances.png")
 
     def on_epoch_end(self, net, dataset_train=None, dataset_valid=None):
         self.plot_dist(net, dataset_train.X, dataset_train.y["coherency"], "train")
@@ -267,9 +264,9 @@ class Ts2VecScore():
     def __call__(self, fsarg, dset=None, y=None):
         # Extractor called
         if isinstance(fsarg, dict):
-            return fsarg[self.label].cpu()
+            return fsarg[self.label]
         # Scorer callback
-        X, _ = gpu_if_available(dset.X)
+        X, _ = dset.X
         with torch.no_grad():
             if self.label == "attack":
                 y_hat = fsarg.module_.context_anomaly(X["context"])
@@ -362,6 +359,7 @@ class Ts2LSTM2Vec(Ts2Vec):
 
     def forward(self, activity=None, context=None, coherency_activity=None):
         e_actv = self.toembedding(activity)
+        e_context = self.toembedding(context)
         e_cohactv = self.toembedding(coherency_activity)
-        return (e_actv, e_cohactv) 
+        return (e_actv, e_context, e_cohactv) 
 
