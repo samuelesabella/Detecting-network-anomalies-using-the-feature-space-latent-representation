@@ -228,7 +228,7 @@ def findHardSamples(samples):
     return res
 
 
-def in_bound(v, th1, th2):
+def in_bound(v, th1):
     """Select the minimum above a threshold {th1} and below {th2}
     """
     valid_idx = np.where(v >= th1)[0]
