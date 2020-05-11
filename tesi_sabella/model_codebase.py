@@ -334,7 +334,6 @@ class NeuralNetIncrementalBatch(skorch.net.NeuralNet):
         self.max_batch_size = max_batch_size
         self.__orig_batch_size = kwargs["batch_size"]
         self.incr_batch = self.__orig_batch_size
-        import pdb; pdb.set_trace() 
 
     @property
     def batch_size(self):
