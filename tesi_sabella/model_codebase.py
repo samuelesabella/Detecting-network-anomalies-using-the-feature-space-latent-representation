@@ -3,6 +3,7 @@ from scipy.stats import truncnorm
 from sklearn.manifold import TSNE
 from skorch.callbacks import EpochScoring
 from tqdm import tqdm
+import sys
 import math
 import matplotlib.pyplot as plt
 import more_itertools as mit
@@ -193,20 +194,56 @@ def gpu_if_available(X, Y=None):
     return X, Y
 
 
-# ----- ----- LOSSES/SCORING ----- ----- #
-# ----- ----- -------------- ----- ----- #
+# ----- ----- LOSSES ----- ----- #
+# ----- ----- ------ ----- ----- #
 class Contextual_Coherency():
     def __init__(self, alpha=.3):
         self.alpha = alpha
 
     def __call__(self,  model_output, labels):
-        e_actv, e_ap, e_an = model_output
+        e_actv, e_ap = model_output
 
         ap_dist = F.relu(torch.norm((e_actv - e_ap), p=2, dim=1) - BETA_1)
+        e_an = findHardSamples(e_actv)
         an_dist = F.relu(BETA_2 - torch.norm((e_actv - e_an), p=2, dim=1))
         return torch.mean(ap_dist + an_dist)
 
 
+def findHardSamples(samples):
+    # Computing distance matrix
+    n = len(samples)
+    dm = torch.pdist(samples)
+    # Converting tu full matrix
+    tri = torch.zeros((n, n))
+    tri[np.triu_indices(n, 1)] = dm.cpu()
+    fmatrix = torch.tril(tri.T, 1) + tri
+    # Removing diagonal
+    fmatrix += sys.maxsize * (torch.eye(n, n))
+    # Getting the minimum
+    # idxs = [torch.argmin(r) for r in fmatrix]
+    idxs = [in_bound(row, BETA_1) for idx, row in enumerate(fmatrix)]
+    res = torch.stack([samples[i] for i in idxs])
+    if torch.cuda.is_available():
+        res = res.cuda()
+    return res
+
+
+def in_bound(v, th1, th2):
+    """Select the minimum above a threshold {th1} and below {th2}
+    """
+    valid_idx = np.where(v >= th1)[0]
+    if len(valid_idx) < 2:
+        # Note: {v} contains also the distance among the first positive anchor
+        #           and itself (i.e. fmatrix{i,i}=inf). Thus v{i} will always be 
+        #           greater than the threshold. To avoid taking the anchor positive
+        #           as the semi-hard negative, we check if the valid indexes are more
+        #           than 2, otherwise it means that there is no semi-hard sample
+        return torch.argmin(v)
+    return valid_idx[v[valid_idx].argmin()]
+
+
+# ----- ----- SCORING ----- ----- #
+# ----- ----- ------- ----- ----- #
 class EpochPlot(skorch.callbacks.Callback):
     def __init__(self, path, onlabel):
         self.path = path
@@ -234,13 +271,14 @@ class DistPlot(skorch.callbacks.Callback):
 
     def plot_dist(self, net, X, label):
         with torch.no_grad():
-            e_actv, e_coh, e_incoh = net.forward(X)
+            e_actv, e_ap = net.forward(X)
+            e_an = findHardSamples(e_actv)
         # Coherent activity
-        coh_dist = torch.norm((e_actv - e_coh), p=2, dim=1).cpu()
+        coh_dist = torch.norm((e_actv - e_ap), p=2, dim=1).cpu()
         coh_mean_dist = torch.mean(coh_dist)
         self.history[f"coherent_dist_{label}"].append(coh_mean_dist)
         # Incoherent activity
-        incoh_dist = torch.norm((e_actv - e_incoh), p=2, dim=1).cpu()
+        incoh_dist = torch.norm((e_actv - e_an), p=2, dim=1).cpu()
         incoh_mean_dist = torch.mean(incoh_dist)
         self.history[f"incoherent_dist_{label}"].append(incoh_mean_dist)
 
@@ -290,6 +328,28 @@ class Ts2VecScore():
 
 # ----- ----- MODEL ----- ----- #
 # ----- ----- ----- ----- ----- #
+class NeuralNetIncrementalBatch(skorch.net.NeuralNet):
+    def __init__(self, *args, max_batch_size=-1, **kwargs):
+        super(NeuralNetIncrementalBatch, self).__init__(*args, **kwargs)
+        self.max_batch_size = max_batch_size
+        self.__orig_batch_size = kwargs["batch_size"]
+        self.incr_batch = self.__orig_batch_size
+        import pdb; pdb.set_trace() 
+
+    @property
+    def batch_size(self):
+        self.incr_batch = max(self.incr_batch + .7, self.max_batch_size)
+        return int(self.incr_batch)
+
+    @batch_size.setter
+    def batch_size(self, x):
+        self.__batch_size = x
+
+    def fit(self, *args, **kwargs):
+        super().fit(*args, **kwargs)
+        self.incr_batch = self.__orig_batch_size
+
+
 class Ts2Vec(torch.nn.Module):
     def context_anomaly(self, contexts):
         raise NotImplementedError()
@@ -367,6 +427,5 @@ class Ts2LSTM2Vec(Ts2Vec):
     def forward(self, activity=None, context=None, anchor_positive=None, anchor_negative=None):
         e_actv = self.toembedding(activity)
         e_ap = self.toembedding(anchor_positive)
-        e_an = self.toembedding(anchor_negative)
-        return (e_actv, e_ap, e_an) 
+        return (e_actv, e_ap) 
 

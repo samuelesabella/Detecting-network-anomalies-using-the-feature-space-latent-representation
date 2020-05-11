@@ -159,12 +159,13 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- ----------- ----- ----- #
 KFOLD_SPLITS = 5
 MAX_EPOCHS = 1500 
-PATIENCE = 75
+PATIENCE = 15
 BATCH_SIZE = 32
-WINDOW_OVERLAPPING = .90
+MAX_BATCH_SIZE = 1024
+WINDOW_OVERLAPPING = .9
 
 grid_params = ParameterGrid({
-    "lr": [ .0001, .1 ],
+    "lr": [ 1e-3, 1e-4 ],
     "max_epochs": [ MAX_EPOCHS ],
 })
 
@@ -276,7 +277,7 @@ if __name__ == "__main__":
 
     # Grid hyperparams ..... #
     kf = KFold(n_splits=KFOLD_SPLITS, shuffle=True, random_state=SEED)
-    net = NeuralNet(
+    net = cb.NeuralNetIncrementalBatch(
         cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
         optimizer=torch.optim.Adam, 
@@ -289,7 +290,8 @@ if __name__ == "__main__":
             cb.DistPlot(args.outpath),
             cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
             EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
-        ])    
+        ],
+        max_batch_size=MAX_BATCH_SIZE)    
 
     # Grid search ..... #
     logging.debug("Starting grid search")
