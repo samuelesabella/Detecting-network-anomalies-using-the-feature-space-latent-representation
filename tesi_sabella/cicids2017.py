@@ -162,7 +162,7 @@ MAX_EPOCHS = 1500
 PATIENCE = 15
 BATCH_SIZE = 32
 MAX_BATCH_SIZE = 1024
-WINDOW_OVERLAPPING = .9
+WINDOW_OVERLAPPING = .99
 
 grid_params = ParameterGrid({
     "lr": [ 1e-3, 1e-4 ],
@@ -232,7 +232,7 @@ def load_dataset(path):
 
 def last_res_dframe(net, params):
     ignore_keys = ["batches", "epoch", "train_batch_count", "valid_batch_count"]
-    kfold_res = {k:v for k,v in net.history[-1].items() if k not in ignore_keys}
+    kfold_res = { k:v for k,v in net.history[-1].items() if k not in ignore_keys }
     kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
     return pd.Series(kfold_res).to_frame().T
 
@@ -304,10 +304,11 @@ if __name__ == "__main__":
             X_cv_train = { k: v[train_index, :] for k, v in X_train.items() }
             X_cv_vl = { k: v[vl_index, :] for k, v in X_train.items() }
             cv_validation = Dataset(X_cv_vl)
+            import pdb; pdb.set_trace() 
 
             net.train_split = predefined_split(cv_validation)
-            fmodel = net.fit(X_cv_train)
-            grid_res = pd.concat([grid_res, last_res_dframe(fmodel, params)])
+            net.fit(X_cv_train)
+            grid_res = pd.concat([grid_res, last_res_dframe(net, params)])
     grid_res = grid_res.infer_objects()
 
     # Get best configuration ..... #
