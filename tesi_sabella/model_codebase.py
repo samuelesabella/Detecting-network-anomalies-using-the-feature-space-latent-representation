@@ -125,16 +125,12 @@ def filter_distances(current_idx, distances, start_time, end_time):
     time_mask = []
     distances = distances.detach().numpy()
 
-    current_start = pd.datetime.utcfromtimestamp(start_time[current_idx])
-    current_end = pd.datetime.utcfromtimestamp(end_time[current_idx])
-    utc_start = map(pd.datetime.utcfromtimestamp, start_time)
-    utc_end = map(pd.datetime.utcfromtimestamp, end_time)
-    for s, e in zip(utc_start, utc_end):
-        trange = max(e - current_start, current_end - s)
-        time_mask.append(trange.total_seconds() // 3600 > 1) # 1 hour range
+    delay_before = (end_time - start_time[current_idx]) // 3600
+    delay_after = (end_time[current_idx] - start_time) // 3600
+    delays = torch.stack([delay_before, delay_after]).max(dim=0)[0]
+    delay_mask = (delays >= 1).numpy()
 
-    time_mask = np.array(time_mask, dtype=bool)
-    valid_idx = np.where(time_mask & (distances > BETA_1))[0]
+    valid_idx = np.where(delay_mask & (distances > BETA_1))[0]
     return valid_idx[distances[valid_idx].argmin()]
 
 
