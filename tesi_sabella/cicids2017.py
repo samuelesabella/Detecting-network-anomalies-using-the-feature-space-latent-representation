@@ -160,9 +160,8 @@ class CICIDS2017(generator.FluxDataGenerator):
 KFOLD_SPLITS = 5
 MAX_EPOCHS = 1500 
 PATIENCE = 15
-BATCH_SIZE = 32
-MAX_BATCH_SIZE = 1024
-WINDOW_OVERLAPPING = .99
+BATCH_SIZE = 1024
+WINDOW_OVERLAPPING = .2
 
 grid_params = ParameterGrid({
     "lr": [ 1e-3, 1e-4 ],
@@ -181,52 +180,33 @@ def prepare_dataset(df):
     for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day, update=False)
-        test_day = cb.ts_windowing(df_day_preproc, overlapping=WINDOW_OVERLAPPING)
+        day_samples = cb.ts_windowing(df_day_preproc, overlapping=WINDOW_OVERLAPPING)
         
-        attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].unique()
-        normal_rows = torch.where(test_day["attack"] == cb.NORMAL_TRAFFIC)[0].unique()
-        normal_rows = np.random.choice(normal_rows, len(attacks_rows), replace=False)
+        attacks_samples = np.unique(np.where(day_samples["attack"] == cb.ATTACK_TRAFFIC)[0])
+        normal_samples = np.unique(np.where(day_samples["attack"] == cb.NORMAL_TRAFFIC)[0])
+        normal_samples = np.random.choice(normal_samples, len(attacks_samples), replace=False)
 
-        sampled_rows = np.concatenate([normal_rows, attacks_rows])
-        sample_df = test_day["X"].loc[sampled_rows]
-        sample_attack_label = test_day["attack"][sampled_rows]
-
-        test_set["X"].append(sample_df)
-        test_set["attack"].append(sample_attack_label)
-    
-    # Resetting sample indexes for test set
-    test_samples = []
-    for day_df in test_set["X"]:
-        samples = day_df.groupby(level="sample_idx", sort=False)
-        test_samples.extend([sg[1].reset_index(level="sample_idx") for sg in samples])
-    test_set_len = len(test_samples)
-    test_set["X"] = pd.concat(test_samples, keys=range(test_set_len), names=["sample_idx"])
-    test_set["X"].drop(columns=["sample_idx"], inplace=True)
-    
-    # concatenating labels 
-    test_set["attack"] = torch.cat(test_set["attack"])
-
+        subsamples = np.concatenate([normal_samples, attacks_samples])
+        for k, v in day_samples.items():
+            test_set[k].append(v[subsamples])
+    test_set = { k: np.concatenate(v) for k, v in test_set.items() } 
     return train_set, test_set
 
 
 def store_dataset(dataset, path):
     path.mkdir(parents=True, exist_ok=True)
     for k, v in dataset.items():
-        if torch.is_tensor(v):
-            torch.save(v, path / f"{k}.torch.pkl")
-        elif isinstance(v, pd.DataFrame):
-            pd.to_pickle(v.reset_index(), path / f"{k}.pandas.pkl") 
+        np.save(path / f"{k}.npy", v)
 
 
 def load_dataset(path):
     dataset = {}
     for f in os.listdir(path):
+        if not f.endswith(".npy"):
+            continue
         fpath = path / f
         key = f.split(".")[0]
-        if "torch" in f:
-            dataset[key] = torch.load(fpath)
-        elif "pandas" in f:
-            dataset[key] = pd.read_pickle(fpath).set_index(["sample_idx", "model_input"])
+        dataset[key] = np.load(fpath, allow_pickle=True)
     return dataset
 
 
@@ -263,21 +243,12 @@ if __name__ == "__main__":
         train_set = load_dataset(args.dataset / "model_train")
         test_set = load_dataset(args.dataset / "model_test")
     
-    X_train = cb.X2split_tensors(train_set["X"])
-    X_train, _ = cb.gpu_if_available(X_train)
-
-    X_test = cb.X2split_tensors(test_set["X"])
-    Y_test = test_set["attack"] 
-    X_test, Y_test = cb.gpu_if_available(X_test, Y_test)
-
-    # Scoring ..... #
-    # attack_acc_tr, attack_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "attack").epoch_score()
-    # attack_rec_tr, attack_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "attack").epoch_score()
-    # attack_prec_tr, attack_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "attack").epoch_score()
+    X_train, _ = cb.dataset2tensors(train_set)
+    X_test, Y_test = cb.dataset2tensors(test_set)
 
     # Grid hyperparams ..... #
     kf = KFold(n_splits=KFOLD_SPLITS, shuffle=True, random_state=SEED)
-    net = cb.NeuralNetIncrementalBatch(
+    net = NeuralNet(
         cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
         optimizer=torch.optim.Adam, 
@@ -285,28 +256,24 @@ if __name__ == "__main__":
         device=dev,
         train_split=None,
         callbacks=[
-            # coh_acc_tr, coh_rec_tr, coh_prec_tr,
-            # coh_acc_vl, coh_rec_vl, coh_prec_vl,
             cb.DistPlot(args.outpath),
             cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
             EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
-        ],
-        max_batch_size=MAX_BATCH_SIZE)    
+        ])    
 
     # Grid search ..... #
     logging.debug("Starting grid search")
     grid_res = pd.DataFrame()
-    for params in tqdm(grid_params):  
-        print(params)
+    grid_pbar = tqdm(grid_params)
+    for params in grid_pbar:  
+        grid_pbar.set_description(str(params))
         setparams(net, params) 
         # Kfold fitting 
         for train_index, vl_index in kf.split(X_train["activity"]):
-            X_cv_train = { k: v[train_index, :] for k, v in X_train.items() }
-            X_cv_vl = { k: v[vl_index, :] for k, v in X_train.items() }
-            cv_validation = Dataset(X_cv_vl)
-            import pdb; pdb.set_trace() 
-
-            net.train_split = predefined_split(cv_validation)
+            X_cv_train = { k: v[train_index] for k, v in X_train.items() }
+            X_cv_vl = { k: v[vl_index] for k, v in X_train.items() }
+            
+            net.train_split = predefined_split(Dataset(X_cv_vl)) 
             net.fit(X_cv_train)
             grid_res = pd.concat([grid_res, last_res_dframe(net, params)])
     grid_res = grid_res.infer_objects()
@@ -318,7 +285,6 @@ if __name__ == "__main__":
     best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
     
     # Retrain on whole dataset ..... #
-    # net.callbacks.extend([attack_acc_tr, attack_acc_vl])
     setparams(net, best_params)
     test_set = Dataset(X_test, Y_test)
     net.train_split = predefined_split(test_set)
