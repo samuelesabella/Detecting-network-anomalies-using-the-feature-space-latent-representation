@@ -33,7 +33,7 @@ class Preprocessor():
     def __init__(self, deltas=True, discretize=True):
         self.compute_deltas = deltas
         self.compute_discrtz = discretize
-        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=14, encode="ordinal", strategy="quantile"))
+        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=25, encode="ordinal", strategy="quantile"))
 
     @staticmethod
     def date_as_feature(df):

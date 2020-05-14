@@ -132,7 +132,7 @@ def filter_distances(current_idx, distances, start_time, end_time, host):
     delay_before = (end_time - start_time[current_idx]) // 3600
     delay_after = (end_time[current_idx] - start_time) // 3600
     delays = torch.stack([delay_before, delay_after]).max(dim=0)[0]
-    delay_mask = (delays >= 1).numpy()
+    delay_mask = (delays >= 1).numpy() # cpu().numpy()
     host_mask = (host != host[current_idx])
 
     valid_idx = np.where(host_mask & (distances > BETA_1))[0]
@@ -150,7 +150,7 @@ def tuple_mining(e_actv, context, start_time, end_time, host):
     dm = torch.pdist(e_actv)
     # Converting tu full nxn matrix
     tri = torch.zeros((n, n))
-    tri[np.triu_indices(n, 1)] = dm
+    tri[np.triu_indices(n, 1)] = dm # .cpu()
     fmatrix = torch.tril(tri.T, 1) + tri
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
