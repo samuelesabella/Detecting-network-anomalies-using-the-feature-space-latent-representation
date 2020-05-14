@@ -3,6 +3,7 @@ import copy
 from scipy.stats import truncnorm
 from sklearn.manifold import TSNE
 from skorch.callbacks import EpochScoring
+from sklearn import preprocessing
 from tqdm import tqdm
 import sys
 import math
@@ -68,6 +69,7 @@ def ts_windowing(df, overlapping=.95):
             activity = context[actvstart:actvend]
             samples["activity"].append(activity)
             samples["context"].append(context)
+            samples["host"].append(host)
             samples["start_time"].append(host_actv["_time"].min().timestamp())
             samples["end_time"].append(host_actv["_time"].max().timestamp())
 
@@ -80,6 +82,8 @@ def ts_windowing(df, overlapping=.95):
 
 def dataset2tensors(dataset):
     dataset["activity"] = torch.Tensor(dataset["activity"])
+    # Host to id
+    dataset["host"] = preprocessing.LabelEncoder().fit_transform(dataset["host"])
     Y = torch.Tensor(dataset["attack"])
     del dataset["attack"]
 
@@ -119,7 +123,7 @@ def random_sublist(l, sub_wlen):
     return l.iloc[r:r+sub_wlen]
 
 
-def filter_distances(current_idx, distances, start_time, end_time):
+def filter_distances(current_idx, distances, start_time, end_time, host):
     """Select the minimum above a threshold {th1} and in time range
     """
     time_mask = []
@@ -129,12 +133,13 @@ def filter_distances(current_idx, distances, start_time, end_time):
     delay_after = (end_time[current_idx] - start_time) // 3600
     delays = torch.stack([delay_before, delay_after]).max(dim=0)[0]
     delay_mask = (delays >= 1).numpy()
+    host_mask = (host != host[current_idx])
 
-    valid_idx = np.where(delay_mask & (distances > BETA_1))[0]
+    valid_idx = np.where(host_mask & (distances > BETA_1))[0]
     return valid_idx[distances[valid_idx].argmin()]
 
 
-def tuple_mining(e_actv, context, start_time, end_time):
+def tuple_mining(e_actv, context, start_time, end_time, host):
     # Anchor positives ..... #
     r = int((CONTEXT_LEN - ACTIVITY_LEN) * zero_one_normal())
     ap = context[:, r:r+ACTIVITY_LEN] 
@@ -150,7 +155,7 @@ def tuple_mining(e_actv, context, start_time, end_time):
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
     # Getting the minimum
-    idxs = [filter_distances(i, row, start_time, end_time) for i, row in enumerate(fmatrix)]
+    idxs = [filter_distances(i, row, start_time, end_time, host) for i, row in enumerate(fmatrix)]
     dn = torch.stack([e_actv[i] for i in idxs])
     
     if torch.cuda.is_available():
@@ -319,10 +324,10 @@ class Ts2LSTM2Vec(Ts2Vec):
         e = F.normalize(e, p=2, dim=1)
         return e
 
-    def forward(self, activity=None, context=None, start_time=None, end_time=None):
+    def forward(self, activity=None, context=None, start_time=None, end_time=None, host=None):
         e_actv = self.toembedding(activity)
         with torch.no_grad():
-            ap, e_an = tuple_mining(e_actv, context, start_time, end_time)
+            ap, e_an = tuple_mining(e_actv, context, start_time, end_time, host)
         e_ap = self.toembedding(ap)
         return (e_actv, e_ap, e_an) 
 
