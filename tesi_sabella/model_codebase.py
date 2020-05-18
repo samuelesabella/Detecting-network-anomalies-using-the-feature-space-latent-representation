@@ -24,10 +24,10 @@ torch.set_default_dtype(torch.float64)
 
 COHERENT = np.array([ -1. ])
 INCOHERENT = np.array([ 1. ]) 
-NORMAL_TRAFFIC = np.array([ -1. ])
+NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
-CONTEXT_LEN = 120
+CONTEXT_LEN = 56
 ACTIVITY_LEN = 28
 
 BETA_1 = .2
@@ -35,7 +35,7 @@ BETA_2 = .4
 
 
 def plot_dict(d, fpath):
-    plt.figure()
+    plt.clf()
     for k, v in d.items():
         plt.plot(v, label=k)
     plt.legend()
@@ -66,7 +66,7 @@ def ts_windowing(df, overlapping=.95):
         
         for host_actv in wnds_values:
             context = host_actv.drop(columns=["_time", "host", "device_category", "attack"]).values
-            activity = context[actvstart:actvend]
+            activity = context[ACTIVITY_LEN:CONTEXT_LEN]
             samples["activity"].append(activity)
             samples["context"].append(context)
             samples["host"].append(host)
@@ -82,6 +82,7 @@ def ts_windowing(df, overlapping=.95):
 
 def dataset2tensors(dataset):
     dataset["activity"] = torch.Tensor(dataset["activity"])
+    dataset["context"] = torch.Tensor(dataset["context"])
     # Host to id
     dataset["host"] = preprocessing.LabelEncoder().fit_transform(dataset["host"])
     Y = torch.Tensor(dataset["attack"])
@@ -132,17 +133,22 @@ def filter_distances(current_idx, distances, start_time, end_time, host):
     delay_before = (end_time - start_time[current_idx]) // 3600
     delay_after = (end_time[current_idx] - start_time) // 3600
     delays = torch.stack([delay_before, delay_after]).max(dim=0)[0]
-    delay_mask = (delays >= 1).numpy() # cpu().numpy()
-    host_mask = (host != host[current_idx])
-
-    valid_idx = np.where(host_mask & (distances > BETA_1))[0]
+    delay_mask = (delays >= 1).cpu().numpy()
+    host_mask = (host != host[current_idx]).cpu().numpy()
+    
+    if host_mask.any():
+        valid_idx = np.where(host_mask & (distances > BETA_1))[0]
+    else:
+        valid_idx = np.where(delay_mask & (distances > BETA_1))[0]
+    # valid_idx = np.where(delay_mask)[0]
+    
     return valid_idx[distances[valid_idx].argmin()]
 
 
 def tuple_mining(e_actv, context, start_time, end_time, host):
     # Anchor positives ..... #
-    r = int((CONTEXT_LEN - ACTIVITY_LEN) * zero_one_normal())
-    ap = context[:, r:r+ACTIVITY_LEN] 
+    r = 0 # int((CONTEXT_LEN - ACTIVITY_LEN) * zero_one_normal())
+    ap = context[:, 0:ACTIVITY_LEN] 
 
     # Anchor negatives ..... #
     # Computing distance matrix
@@ -150,7 +156,7 @@ def tuple_mining(e_actv, context, start_time, end_time, host):
     dm = torch.pdist(e_actv)
     # Converting tu full nxn matrix
     tri = torch.zeros((n, n))
-    tri[np.triu_indices(n, 1)] = dm # .cpu()
+    tri[np.triu_indices(n, 1)] = dm.cpu()
     fmatrix = torch.tril(tri.T, 1) + tri
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
@@ -174,9 +180,13 @@ class EpochPlot(skorch.callbacks.Callback):
     def __name__(self):
         return f"{self.path}/{self.onlabel}.jpg"
 
+    def set_label(self, d):
+        self.flabel = "__".join([f"{k}_{v}" for k, v in d.items()])
+    
     def on_epoch_end(self, net, *args, **kwargs):
         to_plot = { l: [h[l] for h in net.history_] for l in self.label }
-        plot_dict(to_plot, f"{self.path.absolute()}/{'_'.join(self.label)}.png")
+        fname =  f"{self.path.absolute()}/{self.flabel}__{'_'.join(self.label)}.png"
+        plot_dict(to_plot, fname)
 
 
 class DistPlot(skorch.callbacks.Callback):
@@ -189,7 +199,10 @@ class DistPlot(skorch.callbacks.Callback):
 
     def on_train_begin(self, *args, **kwargs):
         self.history = defaultdict(list)
-
+    
+    def set_label(self, d):
+        self.flabel = "__".join([f"{k}_{v}" for k, v in d.items()])
+    
     def plot_dist(self, net, X, label):
         with torch.no_grad():
             e_actv, e_ap, e_an = net.forward(X)
@@ -204,7 +217,8 @@ class DistPlot(skorch.callbacks.Callback):
 
         keys = [f"coherent_dist_{label}", f"incoherent_dist_{label}"]
         to_plot = { k: v for k, v in self.history.items() if k in keys }
-        plot_dict(to_plot, f"{self.path.absolute()}/{label}_distances.png")
+        fname = f"{self.path.absolute()}/{self.flabel}__{label}_distances.png"
+        plot_dict(to_plot, fname)
 
     def on_epoch_end(self, net, dataset_train=None, dataset_valid=None):
         self.plot_dist(net, dataset_train.X, "train")
@@ -212,37 +226,27 @@ class DistPlot(skorch.callbacks.Callback):
 
 
 class Ts2VecScore():
-    def __init__(self, measure, onlabel):
+    def __init__(self, measure):
         self.measure = measure
-        self.label = onlabel
 
     @property
     def __name__(self):
-        return f"{self.label}__{self.measure.__name__}"
+        return f"{self.measure.__name__}"
 
     def epoch_score(self):
-        es_tr = EpochScoring(self, target_extractor=self, 
-                             on_train=True, lower_is_better=False, 
-                             name=f"train_{self.__name__}")
-        es_vl = EpochScoring(self, target_extractor=self, 
-                             on_train=False, lower_is_better=False, 
+        es_vl = EpochScoring(self, on_train=False, lower_is_better=False, 
                              name=f"valid_{self.__name__}")
-        return es_tr, es_vl
+        return es_vl
 
-    def __call__(self, fsarg, dset=None, y=None):
-        # Extractor called
-        if isinstance(fsarg, dict):
-            return fsarg[self.label]
-        # Scorer callback
-        X, _ = dset.X
+    def __call__(self, net, dset=None, y=None):
+        X = dset.X
         with torch.no_grad():
-            y_hat = fsarg.module_.context_anomaly(X["context"])
+            y_hat = net.module_.context_anomaly(X["context"])
             if y_hat.is_cuda:
                 y_hat = y_hat.cpu()
 
-        y_cat = np.maximum(y, 0)
         y_hat_cat = np.round(y_hat)
-        res = self.measure(y_cat, y_hat_cat)
+        res = self.measure(y, y_hat_cat)
         return res
 
 
@@ -302,14 +306,23 @@ class Ts2Vec(torch.nn.Module):
             res_map = pd.concat([res_map, sample_groups])
         return res_map
 
+    def forward(self, activity=None, context=None, start_time=None, end_time=None, host=None):
+        e_actv = self.toembedding(activity)
+        with torch.no_grad():
+            ap, e_an = tuple_mining(e_actv, context, start_time, end_time, host)
+            e_ap = self.toembedding(ap)
+        return (e_actv, e_ap, e_an)
+
 
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
         super(Ts2LSTM2Vec, self).__init__() 
         self.cnn = nn.Sequential(
-            nn.Conv1d(36, 64, 5, 2),
-            nn.Conv1d(64, 64, 5, 2),
-            nn.Conv1d(64, 128, 4, 1)
+            nn.Conv1d(36, 64, 5, stride=1),
+            nn.MaxPool1d(3, 2),
+            nn.Conv1d(64, 64, 5, stride=1),
+            nn.MaxPool1d(3, 2),
+            nn.Conv1d(64, 128, 3, stride=1)
         )
         self.embedder = nn.Sequential(
             nn.Linear(128, 128),
@@ -324,10 +337,5 @@ class Ts2LSTM2Vec(Ts2Vec):
         e = F.normalize(e, p=2, dim=1)
         return e
 
-    def forward(self, activity=None, context=None, start_time=None, end_time=None, host=None):
-        e_actv = self.toembedding(activity)
-        with torch.no_grad():
-            ap, e_an = tuple_mining(e_actv, context, start_time, end_time, host)
-        e_ap = self.toembedding(ap)
-        return (e_actv, e_ap, e_an) 
+
 

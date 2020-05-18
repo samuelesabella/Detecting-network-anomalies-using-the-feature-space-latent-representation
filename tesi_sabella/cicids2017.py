@@ -19,7 +19,7 @@ import sklearn.metrics as skmetrics
 import torch
 
 import warnings
-warnings.filterwarnings('ignore')
+# warnings.filterwarnings('ignore')
 
 
 # Reproducibility .... #
@@ -158,13 +158,13 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
 KFOLD_SPLITS = 5
-MAX_EPOCHS = 1500 
-PATIENCE = 15
-BATCH_SIZE = 1024
-WINDOW_OVERLAPPING = .2
+MAX_EPOCHS = 2500 
+PATIENCE = 250
+WINDOW_OVERLAPPING = .8
 
 grid_params = ParameterGrid({
-    "lr": [ 1e-3, 1e-4 ],
+    "lr": [ 1e-5, 1e-6, 5e-5 ],
+    "batch_size": [ 2048 ],
     "max_epochs": [ MAX_EPOCHS ],
 })
 
@@ -243,21 +243,23 @@ if __name__ == "__main__":
         train_set = load_dataset(args.dataset / "model_train")
         test_set = load_dataset(args.dataset / "model_test")
     
-    X_train, _ = cb.dataset2tensors(train_set)
+    X_train, Y_train = cb.dataset2tensors(train_set)
     X_test, Y_test = cb.dataset2tensors(test_set)
 
     # Grid hyperparams ..... #
+    dist_plot = cb.DistPlot(args.outpath)
+    loss_plot = cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"])
     kf = KFold(n_splits=KFOLD_SPLITS, shuffle=True, random_state=SEED)
     net = NeuralNet(
         cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
-        optimizer=torch.optim.Adam, 
-        batch_size=BATCH_SIZE,        
+        optimizer=torch.optim.Adam,         
         device=dev,
+        verbose=0,
         train_split=None,
         callbacks=[
-            cb.DistPlot(args.outpath),
-            cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
+            dist_plot,
+            loss_plot,
             EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
 
@@ -268,6 +270,8 @@ if __name__ == "__main__":
     for params in grid_pbar:  
         grid_pbar.set_description(str(params))
         setparams(net, params) 
+        dist_plot.set_label(params)
+        loss_plot.set_label(params)
         # Kfold fitting 
         for train_index, vl_index in kf.split(X_train["activity"]):
             X_cv_train = { k: v[train_index] for k, v in X_train.items() }
@@ -285,10 +289,19 @@ if __name__ == "__main__":
     best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
     
     # Retrain on whole dataset ..... #
+    # Scoring 
+    net.callbacks.extend([
+        cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
+        cb.Ts2VecScore(skmetrics.recall_score).epoch_score(),
+        cb.Ts2VecScore(skmetrics.precision_score).epoch_score(),
+        cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score()
+    ])
+    # Fitting 
     setparams(net, best_params)
     test_set = Dataset(X_test, Y_test)
     net.train_split = predefined_split(test_set)
     best_refit = net.fit(X_train)
+    # Results
     best_refit_res = last_res_dframe(best_refit, best_params) 
     best_refit_res["best_refit"] = True
     grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
