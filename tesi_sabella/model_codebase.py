@@ -80,6 +80,12 @@ def ts_windowing(df, overlapping=.95):
     return samples
 
 
+def X2tensor(X):
+    clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
+    ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
+    return torch.tensor(ts_values)
+
+
 def dataset2tensors(dataset):
     dataset["activity"] = torch.Tensor(dataset["activity"])
     dataset["context"] = torch.Tensor(dataset["context"])

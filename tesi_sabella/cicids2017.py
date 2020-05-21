@@ -255,7 +255,7 @@ if __name__ == "__main__":
         cb.Contextual_Coherency,
         optimizer=torch.optim.Adam,         
         device=dev,
-        verbose=0,
+        verbose=1,
         train_split=None,
         callbacks=[
             dist_plot,
