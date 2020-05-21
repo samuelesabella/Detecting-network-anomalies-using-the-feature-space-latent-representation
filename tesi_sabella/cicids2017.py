@@ -28,6 +28,9 @@ random.seed(SEED)
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
+WINDOW_OVERLAPPING = .9
+PATIENCE = 250
+
 
 def tqdm_iterator(dataset, **kwargs):
     return tqdm(torch.utils.data.DataLoader(dataset, **kwargs))
@@ -157,18 +160,6 @@ class CICIDS2017(generator.FluxDataGenerator):
 
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
-KFOLD_SPLITS = 5
-MAX_EPOCHS = 2500 
-PATIENCE = 250
-WINDOW_OVERLAPPING = .8
-
-grid_params = ParameterGrid({
-    "lr": [ 1e-5, 1e-6, 5e-5 ],
-    "batch_size": [ 2048 ],
-    "max_epochs": [ MAX_EPOCHS ],
-})
-
-
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
     
@@ -210,10 +201,11 @@ def load_dataset(path):
     return dataset
 
 
-def last_res_dframe(net, params):
+def last_res_dframe(net, params=None):
     ignore_keys = ["batches", "epoch", "train_batch_count", "valid_batch_count"]
     kfold_res = { k:v for k,v in net.history[-1].items() if k not in ignore_keys }
-    kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
+    if params:
+        kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
     return pd.Series(kfold_res).to_frame().T
 
 
@@ -222,34 +214,44 @@ def setparams(net, params):
         setattr(net, k, v)
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-
-    parser = argparse.ArgumentParser(description="mEmbedding training")
-    parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
-    parser.add_argument("--outpath", "-o", help="Grid-search output file", type=Path, required=True)
-    parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
-    args = parser.parse_args()
-    args.outpath.mkdir(parents=True, exist_ok=True)
-
-    # Data loading ..... # 
-    if args.timeseries is not None: 
-        df = pd.read_pickle(args.timeseries)
-        train_set, test_set = prepare_dataset(df)
-        store_dataset(train_set, args.timeseries.parent / "model_train") 
-        store_dataset(test_set, args.timeseries.parent / "model_test")
-    else:
-        train_set = load_dataset(args.dataset / "model_train")
-        test_set = load_dataset(args.dataset / "model_test")
-    
-    X_train, Y_train = cb.dataset2tensors(train_set)
-    X_test, Y_test = cb.dataset2tensors(test_set)
-
+def train_model(X_train, X_test, Y_test, outpath):
     # Grid hyperparams ..... #
-    dist_plot = cb.DistPlot(args.outpath)
-    loss_plot = cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"])
-    kf = KFold(n_splits=KFOLD_SPLITS, shuffle=True, random_state=SEED)
+    dist_plot = cb.DistPlot(outpath)
+    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
+    net = NeuralNet(
+        cb.Ts2LSTM2Vec, 
+        cb.Contextual_Coherency,
+        optimizer=torch.optim.Adam,         
+        lr=5e-4,
+        batch_size=4096,
+        device=dev,
+        verbose=1,
+        train_split=None,
+        callbacks=[
+            dist_plot, loss_plot,
+            cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
+            cb.Ts2VecScore(skmetrics.recall_score).epoch_score(),
+            cb.Ts2VecScore(skmetrics.precision_score).epoch_score(),
+            cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score(),
+            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+        ])    
+
+    # Retrain on whole dataset ..... #
+    test_set = Dataset(X_test, Y_test)
+    net.train_split = predefined_split(test_set)
+    res = net.fit(X_train)
+    res = last_res_dframe(res) 
+    grid_res = res.infer_objects()
+    
+    grid_res.to_pickle(outpath/ "train_results.pkl")
+    torch.save(net.module_.state_dict(), outpath / "ts2vec.torch")
+
+
+def grid_search(X_train, X_test, Y_test, grid_params, kfold, outpath):
+    grid_res = pd.DataFrame()
+    
+    dist_plot = cb.DistPlot(outpath)
+    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     net = NeuralNet(
         cb.Ts2LSTM2Vec, 
         cb.Contextual_Coherency,
@@ -265,15 +267,14 @@ if __name__ == "__main__":
 
     # Grid search ..... #
     logging.debug("Starting grid search")
-    grid_res = pd.DataFrame()
     grid_pbar = tqdm(grid_params)
     for params in grid_pbar:  
         grid_pbar.set_description(str(params))
         setparams(net, params) 
-        dist_plot.set_label(params)
-        loss_plot.set_label(params)
+        dist_plot.set_flabel(params)
+        loss_plot.set_flabel(params)
         # Kfold fitting 
-        for train_index, vl_index in kf.split(X_train["activity"]):
+        for train_index, vl_index in kfold.split(X_train["activity"]):
             X_cv_train = { k: v[train_index] for k, v in X_train.items() }
             X_cv_vl = { k: v[vl_index] for k, v in X_train.items() }
             
@@ -307,7 +308,44 @@ if __name__ == "__main__":
     grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
     grid_res = grid_res.infer_objects()
 
-    grid_res.to_pickle(args.outpath/ "grid_results.pkl")
-    torch.save(net.module_.state_dict(), args.outpath / "ts2vec.torch")
+    grid_res.to_pickle(outpath / "grid_results.pkl")
+    torch.save(net.module_.state_dict(), outpath / "ts2vec.torch")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+
+    parser = argparse.ArgumentParser(description="mEmbedding training")
+    parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
+    parser.add_argument("--grid", "-g", help="Start grid search", default=False, action="store_true")
+    parser.add_argument("--outpath", "-o", help="Grid-search output file", type=Path, required=True)
+    parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
+    args = parser.parse_args()
+    args.outpath.mkdir(parents=True, exist_ok=True)
+
+    # Data loading ..... # 
+    if args.timeseries is not None: 
+        df = pd.read_pickle(args.timeseries)
+        train_set, test_set = prepare_dataset(df)
+        store_dataset(train_set, args.timeseries.parent / "model_train") 
+        store_dataset(test_set, args.timeseries.parent / "model_test")
+    else:
+        train_set = load_dataset(args.dataset / "model_train")
+        test_set = load_dataset(args.dataset / "model_test")
+    
+    X_train, _ = cb.dataset2tensors(train_set)
+    X_test, Y_test = cb.dataset2tensors(test_set)
+
+    if args.grid: 
+        grid_params = ParameterGrid({
+            "lr": [ 1e-5, 1e-6, 5e-5 ],
+            "batch_size": [ 2048 ],
+            "max_epochs": [ 2500 ],
+        })
+        kf = KFold(n_splits=5, shuffle=True, random_state=SEED)
+        grid_search(X_test, X_test, Y_test, grid_params, kf, args.outpath)
+    else:
+        train_model(X_train, X_test, Y_test, args.outpath)
 
 

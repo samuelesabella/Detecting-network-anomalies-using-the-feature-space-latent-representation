@@ -83,7 +83,7 @@ def ts_windowing(df, overlapping=.95):
 def X2tensor(X):
     clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
     ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
-    return torch.tensor(ts_values)
+    return torch.Tensor(ts_values)
 
 
 def dataset2tensors(dataset):
@@ -96,6 +96,7 @@ def dataset2tensors(dataset):
 
     if torch.cuda.is_available():
         dataset["activity"] = dataset["activity"].cuda()
+        dataset["context"] = dataset["context"].cuda()
         Y = Y.cuda()
     return dataset, Y
 
@@ -178,26 +179,28 @@ def tuple_mining(e_actv, context, start_time, end_time, host):
 # ----- ----- SCORING ----- ----- #
 # ----- ----- ------- ----- ----- #
 class EpochPlot(skorch.callbacks.Callback):
-    def __init__(self, path, onlabel):
+    def __init__(self, path, on_measure):
         self.path = path
-        self.label = onlabel
+        self.flabel = ""
+        self.on_measure = on_measure
 
     @property
     def __name__(self):
-        return f"{self.path}/{self.onlabel}.jpg"
+        return '_'.join(self.on_measure)
 
-    def set_label(self, d):
+    def set_flabel(self, d):
         self.flabel = "__".join([f"{k}_{v}" for k, v in d.items()])
     
     def on_epoch_end(self, net, *args, **kwargs):
-        to_plot = { l: [h[l] for h in net.history_] for l in self.label }
-        fname =  f"{self.path.absolute()}/{self.flabel}__{'_'.join(self.label)}.png"
+        to_plot = { l: [h[l] for h in net.history_] for l in self.on_measure }
+        fname =  f"{self.path.absolute()}/{self.flabel}__{self.__name__}.png"
         plot_dict(to_plot, fname)
 
 
 class DistPlot(skorch.callbacks.Callback):
     def __init__(self, path):
         self.path = path
+        self.flabel = "distance"
 
     @property
     def __name__(self):
@@ -206,7 +209,7 @@ class DistPlot(skorch.callbacks.Callback):
     def on_train_begin(self, *args, **kwargs):
         self.history = defaultdict(list)
     
-    def set_label(self, d):
+    def set_flabel(self, d):
         self.flabel = "__".join([f"{k}_{v}" for k, v in d.items()])
     
     def plot_dist(self, net, X, label):
@@ -284,8 +287,7 @@ class Ts2Vec(torch.nn.Module):
             # Windowing and tensorizing ..... #
             activity_wnds = mit.windowed(range(len(ts)), wlen, step=wlen)
             activity_wnds = filter(lambda x: None not in x, activity_wnds)
-            activity_wnds_values = map(lambda x: ts.iloc[list(x)], activity_wnds)
-            activity_wnds_values = list(activity_wnds_values)
+            activity_wnds_values = list(map(lambda x: ts.iloc[list(x)], activity_wnds))
             host_samples = pd.concat(activity_wnds_values, 
                                      keys=range(len(activity_wnds_values)), names=["sample_idx"])
             host_samples.reset_index(level=["host", "_time", "device_category"], inplace=True)
@@ -323,25 +325,16 @@ class Ts2Vec(torch.nn.Module):
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
         super(Ts2LSTM2Vec, self).__init__() 
-        self.cnn = nn.Sequential(
-            nn.Conv1d(36, 64, 5, stride=1),
-            nn.MaxPool1d(3, 2),
-            nn.Conv1d(64, 64, 5, stride=1),
-            nn.MaxPool1d(3, 2),
-            nn.Conv1d(64, 128, 3, stride=1)
-        )
+        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(128, 128),
+            nn.Linear(80, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU())
-   
 
     def toembedding(self, x):
-        x = self.cnn(x.permute(0, 2, 1)).squeeze()
-        e = self.embedder(x)
+        rnn_out, _ = self.rnn(x)
+        e = self.embedder(rnn_out[:, -1])
         e = F.normalize(e, p=2, dim=1)
         return e
-
-
 
