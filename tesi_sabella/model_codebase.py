@@ -6,6 +6,7 @@ from skorch.callbacks import EpochScoring
 from sklearn import preprocessing
 from tqdm import tqdm
 import sys
+from umap import UMAP
 import math
 import matplotlib.pyplot as plt
 import more_itertools as mit
@@ -154,7 +155,7 @@ def filter_distances(current_idx, distances, start_time, end_time, host):
 
 def tuple_mining(e_actv, context, start_time, end_time, host):
     # Anchor positives ..... #
-    r = 0 # int((CONTEXT_LEN - ACTIVITY_LEN) * zero_one_normal())
+    import pdb; pdb.set_trace() 
     ap = context[:, 0:ACTIVITY_LEN] 
 
     # Anchor negatives ..... #
@@ -294,7 +295,8 @@ class Ts2Vec(torch.nn.Module):
             sample_tensors = X2tensor(host_samples).detach()
             ebs = self.toembedding(sample_tensors)
             # t-SNE reduction ..... #
-            ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
+            ebs2D = UMAP().fit_transform(ebs.detach())
+            # ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
             ebs2Ddf = pd.DataFrame(ebs2D, columns=[f"x{i}" for i in range(ebs2D.shape[1])])
 
             # Zipping times with embeddings ..... #
