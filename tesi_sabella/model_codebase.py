@@ -1,8 +1,12 @@
 from collections import defaultdict
+import copy
 from scipy.stats import truncnorm
 from sklearn.manifold import TSNE
 from skorch.callbacks import EpochScoring
+from sklearn import preprocessing
 from tqdm import tqdm
+import sys
+from umap import UMAP
 import math
 import matplotlib.pyplot as plt
 import more_itertools as mit
@@ -16,12 +20,13 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
+torch.set_default_dtype(torch.float64)
 
 
-COHERENT = torch.tensor([ -1. ], dtype=torch.float32)
-INCOHERENT = torch.tensor([ 1. ], dtype=torch.float32) 
-NORMAL_TRAFFIC = torch.tensor([ -1. ], dtype=torch.float32)
-ATTACK_TRAFFIC = torch.tensor([ 1. ], dtype=torch.float32) 
+COHERENT = np.array([ -1. ])
+INCOHERENT = np.array([ 1. ]) 
+NORMAL_TRAFFIC = np.array([ 0. ])
+ATTACK_TRAFFIC = np.array([ 1. ]) 
 
 CONTEXT_LEN = 56
 ACTIVITY_LEN = 28
@@ -31,7 +36,7 @@ BETA_2 = .4
 
 
 def plot_dict(d, fpath):
-    plt.figure()
+    plt.clf()
     for k, v in d.items():
         plt.plot(v, label=k)
     plt.legend()
@@ -40,6 +45,75 @@ def plot_dict(d, fpath):
 
 # ----- ----- DATA RESHAPING ----- ----- #
 # ----- ----- -------------- ----- ----- #
+def ts_windowing(df, overlapping=.95):
+    """
+        ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
+        actv_len  --  activity window length, 7 minutes
+        overlapping -- context windowing overlapping
+        consistency_range  --  activity within this range are considered consistent
+    """
+    samples = defaultdict(list)
+    window_stepsize = max(int(CONTEXT_LEN * (1 - overlapping)), 1) 
+    actvstart = int((CONTEXT_LEN - ACTIVITY_LEN) / 2)
+    actvend = actvstart + ACTIVITY_LEN
+
+    logging.debug("Windowing time series for each host")
+    host_ts = df.groupby(level=['device_category', 'host'])
+    for (_, host), ts in tqdm(host_ts):
+        # Building context/activity windows ..... #
+        wnds = mit.windowed(range(len(ts)), CONTEXT_LEN, step=window_stepsize)
+        wnds = filter(lambda x: None not in x, wnds)
+        wnds_values = map(lambda x: ts.iloc[list(x)].reset_index(), wnds)
+        
+        for host_actv in wnds_values:
+            context = host_actv.drop(columns=["_time", "host", "device_category", "attack"]).values
+            activity = context[ACTIVITY_LEN:CONTEXT_LEN]
+            samples["activity"].append(activity)
+            samples["context"].append(context)
+            samples["host"].append(host)
+            samples["start_time"].append(host_actv["_time"].min().timestamp())
+            samples["end_time"].append(host_actv["_time"].max().timestamp())
+
+            activity_attack = NORMAL_TRAFFIC if (host_actv["attack"]=="none").all() else ATTACK_TRAFFIC
+            samples["attack"].append(activity_attack)
+    
+    samples = { k: np.stack(v) for k, v in samples.items() }
+    return samples
+
+
+def X2tensor(X):
+    clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
+    ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
+    return torch.Tensor(ts_values)
+
+
+def dataset2tensors(dataset):
+    dataset["activity"] = torch.Tensor(dataset["activity"])
+    dataset["context"] = torch.Tensor(dataset["context"])
+    # Host to id
+    dataset["host"] = preprocessing.LabelEncoder().fit_transform(dataset["host"])
+    Y = torch.Tensor(dataset["attack"])
+    del dataset["attack"]
+
+    if torch.cuda.is_available():
+        dataset["activity"] = dataset["activity"].cuda()
+        dataset["context"] = dataset["context"].cuda()
+        Y = Y.cuda()
+    return dataset, Y
+
+
+# ----- ----- LOSSES ----- ----- #
+# ----- ----- ------ ----- ----- #
+class Contextual_Coherency():
+    def __call__(self, model_out, labels):
+        e_actv, e_ap, e_an = model_out 
+        ap_dist = F.relu(torch.norm((e_actv - e_ap), p=2, dim=1) - BETA_1)
+        an_dist = F.relu(BETA_2 - torch.norm((e_actv - e_an), p=2, dim=1))
+        return torch.mean(ap_dist + an_dist)
+
+
+# ----- ----- TUPLE MINING ----- ----- #
+# ----- ----- ------------ ----- ----- #
 class RNTrunc():
     def __init__(self, mean, std, clip_values):
         clip_min, clip_max = clip_values
@@ -52,167 +126,82 @@ class RNTrunc():
 
 zero_one_normal = RNTrunc(.5, .2, (0, 1))
 
+
 def random_sublist(l, sub_wlen):
     r = int((len(l) - sub_wlen) * zero_one_normal())
     return l.iloc[r:r+sub_wlen]
 
 
-def coherent_context_picker(ctx_idx, next_ctx_idx, coherency_bounds, context_windows):
+def filter_distances(current_idx, distances, start_time, end_time, host):
+    """Select the minimum above a threshold {th1} and in time range
     """
-        ctx_idx: current context index 
-        next_ctx_idx: index of the successive context with no samples in common with the current one
-        coherency_bounds: tuple <lbound, rbound> the boundaries of the coherent range
-        context_windows: list of all the context windows
-    """
-    r = random.random()
-    # if r < .25: # Sample from the current context
-    #     return (context_windows[ctx_idx], COHERENT)
-    # if r < .5 and next_ctx_idx < len(context_windows): # Sample from the context of the next activity
-    #     ctx_b = context_windows[next_ctx_idx]
-    #     return (ctx_b, COHERENT)
-    if r < .5: # Sample context distant in time
-        shift_direction = True if random.random() > 0 else False
-        lbound, rbound = coherency_bounds
-        if lbound > 0 and (rbound > len(context_windows)-1 or shift_direction):
-            # sample context before
-            random_shift = random.randint(0, lbound)
-        else:
-            # sample context after
-            random_shift = random.randint(rbound, len(context_windows) - 1)
-        x_b = context_windows[random_shift]
-        return (x_b, INCOHERENT)
-    return (None, INCOHERENT) # Sample from full dataset
+    time_mask = []
+    distances = distances.detach().numpy()
 
-
-def ts_windowing(df, ctx_len=CONTEXT_LEN, actv_len=ACTIVITY_LEN, 
-        overlapping=.95, consistency_range=240, pick_coherent_activity=True):
-    """
-        ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
-        actv_len  --  activity window length, 7 minutes
-        overlapping -- context windowing overlapping
-        consistency_range  --  activity within this range are considered consistent
-    """
-    samples = defaultdict(list)
-    window_stepsize = max(int(ctx_len * (1 - overlapping)), 1) 
-    inconsistency_steps = math.ceil(consistency_range / window_stepsize)
-
-    logging.debug("Windowing time series for each host")
-    host_ts = df.groupby(level=['device_category', 'host'])
-    for (_, host), ts in tqdm(host_ts):
-        # Building context/activity windows ..... #
-        ctx_wnds = mit.windowed(range(len(ts)), ctx_len, step=window_stepsize)
-        ctx_wnds = filter(lambda x: None not in x, ctx_wnds)
-        ctx_wnds_values = list(map(lambda x: ts.iloc[list(x)], ctx_wnds))
-        actv_wnds = map(lambda x: random_sublist(x, actv_len), ctx_wnds_values)
-
-        # Coherency and training tuple generation ...... #
-        def coh_aus(i):
-            next_ctx = i + int(ctx_len / window_stepsize)
-            next_incoherent = i + inconsistency_steps
-            prev_incoherent = i - inconsistency_steps 
-            coherence_bounds = (prev_incoherent, next_incoherent)
-            return coherent_context_picker(i, next_ctx, coherence_bounds, ctx_wnds_values) 
-        coherent_contexts = map(coh_aus, range(len(ctx_wnds_values)))
-        h_samples = zip(ctx_wnds_values, actv_wnds, coherent_contexts)
-        for ctx, activity, (coh_ctx, coh_label) in h_samples:
-            samples["activity"].append(activity)
-            samples["context"].append(ctx)
-            # Need host information to pick samples from different host
-            coh_info = host if coh_ctx is None else coh_ctx 
-            samples["coherency_context"].append(coh_info)
-
-            samples["coherency"].append(coh_label)
-            if "attack" in ctx:
-                ctx_attack = NORMAL_TRAFFIC if (ctx["attack"]=="none").all() else ATTACK_TRAFFIC
-                samples["attack"].append(ctx_attack)
-            
-    # Picking random coherency contexts ..... #
-    def coh_ctx_to_activity(x):
-        # Sampling series from different host
-        while isinstance(x, str):
-            rctx = random.choice(samples["context"])
-            coh_host = rctx.index.get_level_values("host")[0]
-            if coh_host != x:
-                x = rctx
-        if pick_coherent_activity:
-            return random_sublist(x, actv_len)
-        return x
-    logging.debug("Generating coherent activities")
-    samples["coherency_activity"] = list(map(coh_ctx_to_activity, tqdm(samples["coherency_context"])))
-    del samples["coherency_context"]
+    delay_before = (end_time - start_time[current_idx]) // 3600
+    delay_after = (end_time[current_idx] - start_time) // 3600
+    delays = torch.stack([delay_before, delay_after]).max(dim=0)[0]
+    delay_mask = (delays >= 1).cpu().numpy()
+    host_mask = (host != host[current_idx]).cpu().numpy()
     
-    # Merging data frames ..... #
-    logging.debug("Merging dataframes")
-    samples_len = len(samples["context"])
-    context_samples = pd.concat(samples["context"], keys=range(samples_len), names=["sample_idx"])
-    del samples["context"]
-    activity_samples = pd.concat(samples["activity"], keys=range(samples_len), names=["sample_idx"])
-    del samples["activity"]
-    coherency_activity_samples = pd.concat(samples["coherency_activity"], keys=range(samples_len), names=["sample_idx"])
-    del samples["coherency_activity"]
-
-    samples["X"] = pd.concat(
-        [activity_samples, context_samples, coherency_activity_samples], 
-        keys=["activity", "context", "coherency_activity"], names=["model_input"])
-    samples["X"].reset_index(level=["host", "_time", "device_category"], inplace=True)
-    samples["X"] = samples["X"].swaplevel(0, 1)
-
-    # Concatenating labels ..... #
-    if "attack" in samples:
-        samples["attack"] = torch.stack(samples["attack"])
-    samples["coherency"] = torch.stack(samples["coherency"])
-
-    return samples
+    if host_mask.any():
+        valid_idx = np.where(host_mask & (distances > BETA_1))[0]
+    else:
+        valid_idx = np.where(delay_mask & (distances > BETA_1))[0]
+    # valid_idx = np.where(delay_mask)[0]
+    
+    return valid_idx[distances[valid_idx].argmin()]
 
 
-def X2split_tensors(X):
-    return { x[0]: X2tensor(x[1]) for x in X.groupby(level=1) }
+def tuple_mining(e_actv, context, start_time, end_time, host):
+    # Anchor positives ..... #
+    import pdb; pdb.set_trace() 
+    ap = context[:, 0:ACTIVITY_LEN] 
 
-
-def X2tensor(X):
-    clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
-    ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
-    return torch.tensor(ts_values).float()
-
-def gpu_if_available(X, Y=None):
+    # Anchor negatives ..... #
+    # Computing distance matrix
+    n = len(e_actv)
+    dm = torch.pdist(e_actv)
+    # Converting tu full nxn matrix
+    tri = torch.zeros((n, n))
+    tri[np.triu_indices(n, 1)] = dm.cpu()
+    fmatrix = torch.tril(tri.T, 1) + tri
+    # Removing diagonal
+    fmatrix += sys.maxsize * (torch.eye(n, n))
+    # Getting the minimum
+    idxs = [filter_distances(i, row, start_time, end_time, host) for i, row in enumerate(fmatrix)]
+    dn = torch.stack([e_actv[i] for i in idxs])
+    
     if torch.cuda.is_available():
-        X_gpu = { k: v.cuda() for k, v in X.items() }
-        Y_gpu = { k: v.cuda() for k, v in Y.items() } if Y is not None else None
-        return X_gpu, Y_gpu
-    return X, Y
+        return ap.cuda(), dn.cuda()
+    return ap, dn
 
 
-# ----- ----- LOSSES/SCORING ----- ----- #
-# ----- ----- -------------- ----- ----- #
-class Contextual_Coherency():
-    def __init__(self, alpha=.3):
-        self.alpha = alpha
-
-    def __call__(self,  model_output, labels):
-        e_actv, e_ctx, e_coh = model_output
-
-        coh_dist = F.relu(torch.norm((e_actv - e_ctx), p=2, dim=1) - BETA_1)
-        inco_dist = F.relu(BETA_2 - torch.norm((e_actv - e_coh), p=2, dim=1))
-        return torch.mean(coh_dist + inco_dist)
-
-
+# ----- ----- SCORING ----- ----- #
+# ----- ----- ------- ----- ----- #
 class EpochPlot(skorch.callbacks.Callback):
-    def __init__(self, path, onlabel):
+    def __init__(self, path, on_measure):
         self.path = path
-        self.label = onlabel
+        self.flabel = ""
+        self.on_measure = on_measure
 
     @property
     def __name__(self):
-        return f"{self.path}/{self.onlabel}.jpg"
+        return '_'.join(self.on_measure)
 
+    def set_flabel(self, d):
+        self.flabel = "__".join([f"{k}_{v}" for k, v in d.items()])
+    
     def on_epoch_end(self, net, *args, **kwargs):
-        to_plot = { l: [h[l] for h in net.history_] for l in self.label }
-        plot_dict(to_plot, f"{self.path.absolute()}/{'_'.join(self.label)}.png")
+        to_plot = { l: [h[l] for h in net.history_] for l in self.on_measure }
+        fname =  f"{self.path.absolute()}/{self.flabel}__{self.__name__}.png"
+        plot_dict(to_plot, fname)
 
 
 class DistPlot(skorch.callbacks.Callback):
     def __init__(self, path):
         self.path = path
+        self.flabel = "distance"
 
     @property
     def __name__(self):
@@ -220,78 +209,78 @@ class DistPlot(skorch.callbacks.Callback):
 
     def on_train_begin(self, *args, **kwargs):
         self.history = defaultdict(list)
-
-    def plot_dist(self, net, X, y, label):
+    
+    def set_flabel(self, d):
+        self.flabel = "__".join([f"{k}_{v}" for k, v in d.items()])
+    
+    def plot_dist(self, net, X, label):
         with torch.no_grad():
-            e_actv, e_ctx, e_cohactv = net.forward(X)
-        y = y.cpu()
+            e_actv, e_ap, e_an = net.forward(X)
         # Coherent activity
-        coh_dist = torch.norm((e_actv - e_ctx), p=2, dim=1).cpu()
+        coh_dist = torch.norm((e_actv - e_ap), p=2, dim=1).cpu()
         coh_mean_dist = torch.mean(coh_dist)
         self.history[f"coherent_dist_{label}"].append(coh_mean_dist)
         # Incoherent activity
-        incoh_dist = torch.norm((e_actv - e_cohactv), p=2, dim=1).cpu()
+        incoh_dist = torch.norm((e_actv - e_an), p=2, dim=1).cpu()
         incoh_mean_dist = torch.mean(incoh_dist)
         self.history[f"incoherent_dist_{label}"].append(incoh_mean_dist)
 
         keys = [f"coherent_dist_{label}", f"incoherent_dist_{label}"]
         to_plot = { k: v for k, v in self.history.items() if k in keys }
-        plot_dict(to_plot, f"{self.path.absolute()}/{label}_distances.png")
+        fname = f"{self.path.absolute()}/{self.flabel}__{label}_distances.png"
+        plot_dict(to_plot, fname)
 
     def on_epoch_end(self, net, dataset_train=None, dataset_valid=None):
-        self.plot_dist(net, dataset_train.X, dataset_train.y["coherency"], "train")
-        self.plot_dist(net, dataset_valid.X, dataset_valid.y["coherency"], "valid")
+        self.plot_dist(net, dataset_train.X, "train")
+        self.plot_dist(net, dataset_valid.X, "valid")
 
 
 class Ts2VecScore():
-    def __init__(self, measure, onlabel):
+    def __init__(self, measure):
         self.measure = measure
-        self.label = onlabel
 
     @property
     def __name__(self):
-        return f"{self.label}__{self.measure.__name__}"
+        return f"{self.measure.__name__}"
 
     def epoch_score(self):
-        es_tr = EpochScoring(self, target_extractor=self, 
-                             on_train=True, lower_is_better=False, 
-                             name=f"train_{self.__name__}")
-        es_vl = EpochScoring(self, target_extractor=self, 
-                             on_train=False, lower_is_better=False, 
+        es_vl = EpochScoring(self, on_train=False, lower_is_better=False, 
                              name=f"valid_{self.__name__}")
-        return es_tr, es_vl
+        return es_vl
 
-    def __call__(self, fsarg, dset=None, y=None):
-        # Extractor called
-        if isinstance(fsarg, dict):
-            return fsarg[self.label]
-        # Scorer callback
-        X, _ = dset.X
+    def __call__(self, net, dset=None, y=None):
+        X = dset.X
         with torch.no_grad():
-            if self.label == "attack":
-                y_hat = fsarg.module_.context_anomaly(X["context"])
-            else:
-                y_hat = fsarg.module_.activity_coherency(X["activity"], X["coherency_activity"])
+            y_hat = net.module_.context_anomaly(X["context"])
             if y_hat.is_cuda:
                 y_hat = y_hat.cpu()
 
-        y_cat = np.maximum(y, 0)
         y_hat_cat = np.round(y_hat)
-        res = self.measure(y_cat, y_hat_cat)
+        res = self.measure(y, y_hat_cat)
         return res
 
 
 # ----- ----- MODEL ----- ----- #
 # ----- ----- ----- ----- ----- #
 class Ts2Vec(torch.nn.Module):
-    def context_anomaly(self, contexts):
-        raise NotImplementedError()
-
     def toembedding(self, x):
         raise NotImplementedError()
 
     def forward(self, activity=None, context=None, coherency_activity=None):
         raise NotImplementedError()
+
+    def context_anomaly(self, ctx):
+        a1 = ctx[:, :ACTIVITY_LEN]
+        a2 = ctx[:, ACTIVITY_LEN:]
+        return self.activity_coherency(a1, a2)
+
+    def activity_coherency(self, a1, a2):
+        # 1. => incoherent, 0. => coherent
+        e_a1 = self.toembedding(a1)
+        e_a2 = self.toembedding(a2)
+
+        dist = (torch.norm(e_a1 - e_a2, p=2, dim=1) - BETA_1) / BETA_2
+        return torch.clamp(dist, 0., 1.)
 
     def to2Dmap(self, df, wlen=ACTIVITY_LEN):
         res_map = pd.DataFrame()
@@ -299,15 +288,15 @@ class Ts2Vec(torch.nn.Module):
             # Windowing and tensorizing ..... #
             activity_wnds = mit.windowed(range(len(ts)), wlen, step=wlen)
             activity_wnds = filter(lambda x: None not in x, activity_wnds)
-            activity_wnds_values = map(lambda x: ts.iloc[list(x)], activity_wnds)
-            activity_wnds_values = list(activity_wnds_values)
+            activity_wnds_values = list(map(lambda x: ts.iloc[list(x)], activity_wnds))
             host_samples = pd.concat(activity_wnds_values, 
                                      keys=range(len(activity_wnds_values)), names=["sample_idx"])
             host_samples.reset_index(level=["host", "_time", "device_category"], inplace=True)
             sample_tensors = X2tensor(host_samples).detach()
             ebs = self.toembedding(sample_tensors)
             # t-SNE reduction ..... #
-            ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
+            ebs2D = UMAP().fit_transform(ebs.detach())
+            # ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
             ebs2Ddf = pd.DataFrame(ebs2D, columns=[f"x{i}" for i in range(ebs2D.shape[1])])
 
             # Zipping times with embeddings ..... #
@@ -327,39 +316,27 @@ class Ts2Vec(torch.nn.Module):
             res_map = pd.concat([res_map, sample_groups])
         return res_map
 
+    def forward(self, activity=None, context=None, start_time=None, end_time=None, host=None):
+        e_actv = self.toembedding(activity)
+        with torch.no_grad():
+            ap, e_an = tuple_mining(e_actv, context, start_time, end_time, host)
+            e_ap = self.toembedding(ap)
+        return (e_actv, e_ap, e_an)
+
 
 class Ts2LSTM2Vec(Ts2Vec):
     def __init__(self):
         super(Ts2LSTM2Vec, self).__init__() 
-        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)#256, num_layers=3, batch_first=True)
+        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(80, 128),# 256, 128),
+            nn.Linear(80, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU())
-   
-    def context_anomaly(self, ctx):
-        a1 = ctx[:, :ACTIVITY_LEN]
-        a2 = ctx[:, ACTIVITY_LEN:]
-        return self.activity_coherency(a1, a2)
-
-    def activity_coherency(self, a1, a2):
-        # 1. => incoherent, 0. => coherent
-        e_a1 = self.toembedding(a1)
-        e_a2 = self.toembedding(a2)
-
-        dist = torch.norm(e_a1 - e_a2, p=2, dim=1) / BETA_2
-        return torch.clamp(dist, 0., 1.)
 
     def toembedding(self, x):
         rnn_out, _ = self.rnn(x)
         e = self.embedder(rnn_out[:, -1])
         e = F.normalize(e, p=2, dim=1)
         return e
-
-    def forward(self, activity=None, context=None, coherency_activity=None):
-        e_actv = self.toembedding(activity)
-        e_context = self.toembedding(context)
-        e_cohactv = self.toembedding(coherency_activity)
-        return (e_actv, e_context, e_cohactv) 
 

@@ -19,7 +19,7 @@ import sklearn.metrics as skmetrics
 import torch
 
 import warnings
-warnings.filterwarnings('ignore')
+# warnings.filterwarnings('ignore')
 
 
 # Reproducibility .... #
@@ -27,6 +27,9 @@ SEED = 117697
 random.seed(SEED)
 torch.manual_seed(SEED)
 np.random.seed(SEED)
+
+WINDOW_OVERLAPPING = .9
+PATIENCE = 250
 
 
 def tqdm_iterator(dataset, **kwargs):
@@ -159,72 +162,50 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- ----------- ----- ----- #
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor()
-    overl = .90
     
     df_train = df[df.index.get_level_values("_time").day == 3]
     df_train = pr.preprocessing(df_train, update=True)
-    train_set = cb.ts_windowing(df_train, overlapping=overl)
+    train_set = cb.ts_windowing(df_train, overlapping=WINDOW_OVERLAPPING)
 
     test_set = defaultdict(list)
     for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day, update=False)
-        test_day = cb.ts_windowing(df_day_preproc, overlapping=overl)
+        day_samples = cb.ts_windowing(df_day_preproc, overlapping=WINDOW_OVERLAPPING)
         
-        attacks_rows = torch.where(test_day["attack"] == cb.ATTACK_TRAFFIC)[0].unique()
-        normal_rows = torch.where(test_day["attack"] == cb.NORMAL_TRAFFIC)[0].unique()
-        normal_rows = np.random.choice(normal_rows, len(attacks_rows), replace=False)
+        attacks_samples = np.unique(np.where(day_samples["attack"] == cb.ATTACK_TRAFFIC)[0])
+        normal_samples = np.unique(np.where(day_samples["attack"] == cb.NORMAL_TRAFFIC)[0])
+        normal_samples = np.random.choice(normal_samples, len(attacks_samples), replace=False)
 
-        sampled_rows = np.concatenate([normal_rows, attacks_rows])
-        sample_df = test_day["X"].loc[sampled_rows]
-        sample_coh_label = test_day["coherency"][sampled_rows]
-        sample_attack_label = test_day["attack"][sampled_rows]
-
-        test_set["X"].append(sample_df)
-        test_set["coherency"].append(sample_coh_label)
-        test_set["attack"].append(sample_attack_label)
-    
-    # Resetting sample indexes for test set
-    test_samples = []
-    for day_df in test_set["X"]:
-        samples = day_df.groupby(level="sample_idx", sort=False)
-        test_samples.extend([sg[1].reset_index(level="sample_idx") for sg in samples])
-    test_set_len = len(test_samples)
-    test_set["X"] = pd.concat(test_samples, keys=range(test_set_len), names=["sample_idx"])
-    test_set["X"].drop(columns=["sample_idx"], inplace=True)
-    
-    # concatenating labels 
-    test_set["coherency"] = torch.cat(test_set["coherency"])
-    test_set["attack"] = torch.cat(test_set["attack"])
-
+        subsamples = np.concatenate([normal_samples, attacks_samples])
+        for k, v in day_samples.items():
+            test_set[k].append(v[subsamples])
+    test_set = { k: np.concatenate(v) for k, v in test_set.items() } 
     return train_set, test_set
 
 
 def store_dataset(dataset, path):
     path.mkdir(parents=True, exist_ok=True)
     for k, v in dataset.items():
-        if torch.is_tensor(v):
-            torch.save(v, path / f"{k}.torch.pkl")
-        elif isinstance(v, pd.DataFrame):
-            pd.to_pickle(v.reset_index(), path / f"{k}.pandas.pkl") 
+        np.save(path / f"{k}.npy", v)
 
 
 def load_dataset(path):
     dataset = {}
     for f in os.listdir(path):
+        if not f.endswith(".npy"):
+            continue
         fpath = path / f
         key = f.split(".")[0]
-        if "torch" in f:
-            dataset[key] = torch.load(fpath)
-        elif "pandas" in f:
-            dataset[key] = pd.read_pickle(fpath).set_index(["sample_idx", "model_input"])
+        dataset[key] = np.load(fpath, allow_pickle=True)
     return dataset
 
 
-def last_res_dframe(net, params):
+def last_res_dframe(net, params=None):
     ignore_keys = ["batches", "epoch", "train_batch_count", "valid_batch_count"]
-    kfold_res = {k:v for k,v in net.history[-1].items() if k not in ignore_keys}
-    kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
+    kfold_res = { k:v for k,v in net.history[-1].items() if k not in ignore_keys }
+    if params:
+        kfold_res.update({ f"hyperparam_{k}": v for k, v in params.items() })
     return pd.Series(kfold_res).to_frame().T
 
 
@@ -233,12 +214,111 @@ def setparams(net, params):
         setattr(net, k, v)
 
 
+def train_model(X_train, X_test, Y_test, outpath):
+    # Grid hyperparams ..... #
+    dist_plot = cb.DistPlot(outpath)
+    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
+    net = NeuralNet(
+        cb.Ts2LSTM2Vec, 
+        cb.Contextual_Coherency,
+        optimizer=torch.optim.Adam,         
+        lr=5e-4,
+        batch_size=4096,
+        device=dev,
+        verbose=1,
+        train_split=None,
+        callbacks=[
+            dist_plot, loss_plot,
+            cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
+            cb.Ts2VecScore(skmetrics.recall_score).epoch_score(),
+            cb.Ts2VecScore(skmetrics.precision_score).epoch_score(),
+            cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score(),
+            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+        ])    
+
+    # Retrain on whole dataset ..... #
+    test_set = Dataset(X_test, Y_test)
+    net.train_split = predefined_split(test_set)
+    res = net.fit(X_train)
+    res = last_res_dframe(res) 
+    grid_res = res.infer_objects()
+    
+    grid_res.to_pickle(outpath/ "train_results.pkl")
+    torch.save(net.module_.state_dict(), outpath / "ts2vec.torch")
+
+
+def grid_search(X_train, X_test, Y_test, grid_params, kfold, outpath):
+    grid_res = pd.DataFrame()
+    
+    dist_plot = cb.DistPlot(outpath)
+    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
+    net = NeuralNet(
+        cb.Ts2LSTM2Vec, 
+        cb.Contextual_Coherency,
+        optimizer=torch.optim.Adam,         
+        device=dev,
+        verbose=1,
+        train_split=None,
+        callbacks=[
+            dist_plot,
+            loss_plot,
+            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+        ])    
+
+    # Grid search ..... #
+    logging.debug("Starting grid search")
+    grid_pbar = tqdm(grid_params)
+    for params in grid_pbar:  
+        grid_pbar.set_description(str(params))
+        setparams(net, params) 
+        dist_plot.set_flabel(params)
+        loss_plot.set_flabel(params)
+        # Kfold fitting 
+        for train_index, vl_index in kfold.split(X_train["activity"]):
+            X_cv_train = { k: v[train_index] for k, v in X_train.items() }
+            X_cv_vl = { k: v[vl_index] for k, v in X_train.items() }
+            
+            net.train_split = predefined_split(Dataset(X_cv_vl)) 
+            net.fit(X_cv_train)
+            grid_res = pd.concat([grid_res, last_res_dframe(net, params)])
+    grid_res = grid_res.infer_objects()
+
+    # Get best configuration ..... #
+    grid_best_choice = "valid_loss"
+    hyperpar_cols = [c for c in grid_res.columns if "hyperparam" in c]
+    grid_mean = grid_res.groupby(hyperpar_cols)[grid_best_choice].mean()
+    best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
+    
+    # Retrain on whole dataset ..... #
+    # Scoring 
+    net.callbacks.extend([
+        cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
+        cb.Ts2VecScore(skmetrics.recall_score).epoch_score(),
+        cb.Ts2VecScore(skmetrics.precision_score).epoch_score(),
+        cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score()
+    ])
+    # Fitting 
+    setparams(net, best_params)
+    test_set = Dataset(X_test, Y_test)
+    net.train_split = predefined_split(test_set)
+    best_refit = net.fit(X_train)
+    # Results
+    best_refit_res = last_res_dframe(best_refit, best_params) 
+    best_refit_res["best_refit"] = True
+    grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
+    grid_res = grid_res.infer_objects()
+
+    grid_res.to_pickle(outpath / "grid_results.pkl")
+    torch.save(net.module_.state_dict(), outpath / "ts2vec.torch")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--timeseries", "-t", help="Timeseries data path", default=None, type=Path)
+    parser.add_argument("--grid", "-g", help="Start grid search", default=False, action="store_true")
     parser.add_argument("--outpath", "-o", help="Grid-search output file", type=Path, required=True)
     parser.add_argument("--dataset", "-d", help="Training/testing dataset", default=None, type=Path)
     args = parser.parse_args()
@@ -254,82 +334,18 @@ if __name__ == "__main__":
         train_set = load_dataset(args.dataset / "model_train")
         test_set = load_dataset(args.dataset / "model_test")
     
-    X_train = cb.X2split_tensors(train_set["X"])
-    Y_train = { k: train_set[k] for k in ["coherency", "attack"] }
-    X_train, Y_train = cb.gpu_if_available(X_train, Y_train)
+    X_train, _ = cb.dataset2tensors(train_set)
+    X_test, Y_test = cb.dataset2tensors(test_set)
 
-    X_test = cb.X2split_tensors(test_set["X"])
-    Y_test = { k: test_set[k] for k in ["coherency", "attack"] }
-    X_test, Y_test = cb.gpu_if_available(X_test, Y_test)
-
-    # Scoring ..... #
-    # coh_acc_tr, coh_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "coherency").epoch_score()
-    # coh_rec_tr, coh_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "coherency").epoch_score()
-    # coh_prec_tr, coh_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "coherency").epoch_score()
-
-    # attack_acc_tr, attack_acc_vl = cb.Ts2VecScore(skmetrics.accuracy_score, "attack").epoch_score()
-    # attack_rec_tr, attack_rec_vl = cb.Ts2VecScore(skmetrics.recall_score, "attack").epoch_score()
-    # attack_prec_tr, attack_prec_vl = cb.Ts2VecScore(skmetrics.precision_score, "attack").epoch_score()
-
-    # Grid hyperparams ..... #
-    kf = KFold(n_splits=2, shuffle=True, random_state=SEED)
-    net = NeuralNet(
-        cb.Ts2LSTM2Vec, 
-        cb.Contextual_Coherency,
-        optimizer=torch.optim.Adam, 
-        batch_size=64,        
-        device=dev,
-        train_split=None,
-        callbacks=[
-            # coh_acc_tr, coh_rec_tr, coh_prec_tr,
-            # coh_acc_vl, coh_rec_vl, coh_prec_vl,
-            cb.DistPlot(args.outpath),
-            cb.EpochPlot(args.outpath, ["train_loss", "valid_loss"]),
-            EarlyStopping("valid_loss", lower_is_better=True, patience=25)
-        ])    
-    grid_params = ParameterGrid({
-        "lr": [ .0001, .1 ],
-        "max_epochs": [ 1 ],
-    })
-
-    # Grid search ..... #
-    logging.debug("Starting grid search")
-    grid_res = pd.DataFrame()
-    for params in tqdm(grid_params):  
-        print(params)
-        setparams(net, params) 
-        # Kfold fitting 
-        for train_index, vl_index in kf.split(Y_train["coherency"]):
-            X_cv_train = { k: v[train_index, :] for k, v in X_train.items() }
-            Y_cv_train = { k: v[train_index, :] for k, v in Y_train.items() }
-
-            X_cv_vl = { k: v[vl_index, :] for k, v in X_train.items() }
-            Y_cv_vl = { k: v[vl_index, :] for k, v in Y_train.items() }
-            cv_validation = Dataset(X_cv_vl, Y_cv_vl)
-
-            net.train_split = predefined_split(cv_validation)
-            fmodel = net.fit(X_cv_train, Y_cv_train)
-            grid_res = pd.concat([grid_res, last_res_dframe(fmodel, params)])
-    grid_res = grid_res.infer_objects()
-
-    # Get best configuration ..... #
-    grid_best_choice = "valid_loss"
-    hyperpar_cols = [c for c in grid_res.columns if "hyperparam" in c]
-    grid_mean = grid_res.groupby(hyperpar_cols)[grid_best_choice].mean()
-    best_params = dict(zip(grid_mean.index.names, grid_mean.idxmax()))
-    
-    # Retrain on whole dataset ..... #
-    # net.callbacks.extend([attack_acc_tr, attack_acc_vl])
-    setparams(net, best_params)
-    test_set = Dataset(X_test, Y_test)
-    net.train_split = predefined_split(test_set)
-    best_refit = net.fit(X_train, Y_train)
-    best_refit_res = last_res_dframe(best_refit, best_params) 
-    best_refit_res["best_refit"] = True
-    grid_res = pd.concat([grid_res, best_refit_res]).fillna(False)
-    grid_res = grid_res.infer_objects()
-
-    grid_res.to_pickle(args.outpath/ "grid_results.pkl")
-    torch.save(net.module_.state_dict(), args.outpath / "ts2vec.torch")
+    if args.grid: 
+        grid_params = ParameterGrid({
+            "lr": [ 1e-5, 1e-6, 5e-5 ],
+            "batch_size": [ 2048 ],
+            "max_epochs": [ 2500 ],
+        })
+        kf = KFold(n_splits=5, shuffle=True, random_state=SEED)
+        grid_search(X_test, X_test, Y_test, grid_params, kf, args.outpath)
+    else:
+        train_model(X_train, X_test, Y_test, args.outpath)
 
 

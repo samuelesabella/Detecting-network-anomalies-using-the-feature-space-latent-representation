@@ -33,7 +33,7 @@ class Preprocessor():
     def __init__(self, deltas=True, discretize=True):
         self.compute_deltas = deltas
         self.compute_discrtz = discretize
-        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=14, encode="ordinal", strategy="quantile"))
+        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=25, encode="ordinal", strategy="quantile"))
 
     @staticmethod
     def date_as_feature(df):
@@ -88,19 +88,12 @@ class Preprocessor():
         # Note: it was avoided using pandas qcut/cut due to the decoupling between fit and transform 
         #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
         #       with weekly data and used multiple times while the model is running
+        non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
+        if update:
+            df[non_dpi].apply(lambda cs: self.column_kbins[cs.name].fit(cs.values.reshape(-1, 1)), axis=0)
         if self.compute_discrtz:
-            def discretize_ts(x):
-                v = x.values.reshape(-1, 1)
-                if update:
-                    self.updatekbins(x.name, v)
-                kbins = self.column_kbins[x.name]
-                vd = kbins.transform(v).reshape(-1)
-                return vd
-            non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
-            groups = df[non_dpi].groupby(level=["device_category", "host"], group_keys=False)
-            # Discretize individually each column of each host
-            df[non_dpi] = groups.apply(lambda host_ts: host_ts.apply(discretize_ts))
-    
+            df[non_dpi] = df[non_dpi].apply(lambda cs: self.column_kbins[cs.name].transform(cs.values.reshape(-1, 1)).reshape(-1), axis=0)
+
         # Date/hour as a feature ..... #
         df = Preprocessor.date_as_feature(df)
         
