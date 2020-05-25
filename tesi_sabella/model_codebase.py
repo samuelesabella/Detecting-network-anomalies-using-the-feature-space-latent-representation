@@ -1,18 +1,14 @@
 from collections import defaultdict
-import copy
 from scipy.stats import truncnorm
-from sklearn.manifold import TSNE
 from skorch.callbacks import EpochScoring
 from sklearn import preprocessing
 from tqdm import tqdm
 import sys
 from umap import UMAP
-import math
 import matplotlib.pyplot as plt
 import more_itertools as mit
 import numpy as np
 import pandas as pd
-import random
 import skorch
 import torch
 import torch.nn as nn
@@ -23,24 +19,17 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 torch.set_default_dtype(torch.float64)
 
 
-COHERENT = np.array([ -1. ])
-INCOHERENT = np.array([ 1. ]) 
+# ----- ----- CONSTANTS ----- ----- #
+# ----- ----- --------- ----- ----- #
 NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
 CONTEXT_LEN = 56
 ACTIVITY_LEN = 28
 
+# Triplet margins
 BETA_1 = .2
 BETA_2 = .4
-
-
-def plot_dict(d, fpath):
-    plt.clf()
-    for k, v in d.items():
-        plt.plot(v, label=k)
-    plt.legend()
-    plt.savefig(fpath)
 
 
 # ----- ----- DATA RESHAPING ----- ----- #
@@ -54,8 +43,6 @@ def ts_windowing(df, overlapping=.95):
     """
     samples = defaultdict(list)
     window_stepsize = max(int(CONTEXT_LEN * (1 - overlapping)), 1) 
-    actvstart = int((CONTEXT_LEN - ACTIVITY_LEN) / 2)
-    actvend = actvstart + ACTIVITY_LEN
 
     logging.debug("Windowing time series for each host")
     host_ts = df.groupby(level=['device_category', 'host'])
@@ -67,8 +54,6 @@ def ts_windowing(df, overlapping=.95):
         
         for host_actv in wnds_values:
             context = host_actv.drop(columns=["_time", "host", "device_category", "attack"]).values
-            activity = context[ACTIVITY_LEN:CONTEXT_LEN]
-            samples["activity"].append(activity)
             samples["context"].append(context)
             samples["host"].append(host)
             samples["start_time"].append(host_actv["_time"].min().timestamp())
@@ -88,7 +73,6 @@ def X2tensor(X):
 
 
 def dataset2tensors(dataset):
-    dataset["activity"] = torch.Tensor(dataset["activity"])
     dataset["context"] = torch.Tensor(dataset["context"])
     # Host to id
     dataset["host"] = preprocessing.LabelEncoder().fit_transform(dataset["host"])
@@ -96,7 +80,6 @@ def dataset2tensors(dataset):
     del dataset["attack"]
 
     if torch.cuda.is_available():
-        dataset["activity"] = dataset["activity"].cuda()
         dataset["context"] = dataset["context"].cuda()
         Y = Y.cuda()
     return dataset, Y
@@ -135,7 +118,6 @@ def random_sublist(l, sub_wlen):
 def filter_distances(current_idx, distances, start_time, end_time, host):
     """Select the minimum above a threshold {th1} and in time range
     """
-    time_mask = []
     distances = distances.detach().numpy()
 
     delay_before = (end_time - start_time[current_idx]) // 3600
@@ -148,17 +130,11 @@ def filter_distances(current_idx, distances, start_time, end_time, host):
         valid_idx = np.where(host_mask & (distances > BETA_1))[0]
     else:
         valid_idx = np.where(delay_mask & (distances > BETA_1))[0]
-    # valid_idx = np.where(delay_mask)[0]
     
     return valid_idx[distances[valid_idx].argmin()]
 
 
-def tuple_mining(e_actv, context, start_time, end_time, host):
-    # Anchor positives ..... #
-    import pdb; pdb.set_trace() 
-    ap = context[:, 0:ACTIVITY_LEN] 
-
-    # Anchor negatives ..... #
+def find_neg_anchors(e_actv, context, start_time, end_time, host):
     # Computing distance matrix
     n = len(e_actv)
     dm = torch.pdist(e_actv)
@@ -173,12 +149,20 @@ def tuple_mining(e_actv, context, start_time, end_time, host):
     dn = torch.stack([e_actv[i] for i in idxs])
     
     if torch.cuda.is_available():
-        return ap.cuda(), dn.cuda()
-    return ap, dn
+        return dn.cuda()
+    return dn
 
 
-# ----- ----- SCORING ----- ----- #
-# ----- ----- ------- ----- ----- #
+# ----- ----- TRAINING CALLBACKS ----- ----- #
+# ----- ----- ------------------ ----- ----- #
+def plot_dict(d, fpath):
+    plt.clf()
+    for k, v in d.items():
+        plt.plot(v, label=k)
+    plt.legend()
+    plt.savefig(fpath)
+
+
 class EpochPlot(skorch.callbacks.Callback):
     def __init__(self, path, on_measure):
         self.path = path
@@ -249,19 +233,16 @@ class Ts2VecScore():
         return es_vl
 
     def __call__(self, net, dset=None, y=None):
-        X = dset.X
         with torch.no_grad():
-            y_hat = net.module_.context_anomaly(X["context"])
+            y_hat = net.module_.context_anomaly(dset.X["context"])
             if y_hat.is_cuda:
                 y_hat = y_hat.cpu()
-
-        y_hat_cat = np.round(y_hat)
-        res = self.measure(y, y_hat_cat)
+        res = self.measure(y, np.round(y_hat))
         return res
 
 
-# ----- ----- MODEL ----- ----- #
-# ----- ----- ----- ----- ----- #
+# ----- ----- MODELS ----- ----- #
+# ----- ----- ------ ----- ----- #
 class Ts2Vec(torch.nn.Module):
     def toembedding(self, x):
         raise NotImplementedError()
@@ -294,7 +275,7 @@ class Ts2Vec(torch.nn.Module):
             host_samples.reset_index(level=["host", "_time", "device_category"], inplace=True)
             sample_tensors = X2tensor(host_samples).detach()
             ebs = self.toembedding(sample_tensors)
-            # t-SNE reduction ..... #
+            # dimensionality reduction ..... #
             ebs2D = UMAP().fit_transform(ebs.detach())
             # ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
             ebs2Ddf = pd.DataFrame(ebs2D, columns=[f"x{i}" for i in range(ebs2D.shape[1])])
@@ -316,17 +297,20 @@ class Ts2Vec(torch.nn.Module):
             res_map = pd.concat([res_map, sample_groups])
         return res_map
 
-    def forward(self, activity=None, context=None, start_time=None, end_time=None, host=None):
-        e_actv = self.toembedding(activity)
+    def forward(self, context=None, start_time=None, end_time=None, host=None):
+        actv = context[:, :ACTIVITY_LEN]
+        e_actv = self.toembedding(actv) 
+
         with torch.no_grad():
-            ap, e_an = tuple_mining(e_actv, context, start_time, end_time, host)
+            ap = context[:, ACTIVITY_LEN:] 
             e_ap = self.toembedding(ap)
+            e_an = find_neg_anchors(e_actv, context, start_time, end_time, host)
         return (e_actv, e_ap, e_an)
 
 
-class Ts2LSTM2Vec(Ts2Vec):
+class GRU2Vec(Ts2Vec):
     def __init__(self):
-        super(Ts2LSTM2Vec, self).__init__() 
+        super(GRU2Vec, self).__init__() 
         self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(80, 128),
