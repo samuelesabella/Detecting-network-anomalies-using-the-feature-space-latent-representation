@@ -157,23 +157,23 @@ class CICIDS2017(generator.FluxDataGenerator):
 
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
-def history2dframe(net, labels):
+def history2dframe(net, labels=None):
     ignore_keys = ["batches", "train_batch_count", "valid_batch_count"]
     best_epoch = next(x for x in net.history if x["valid_loss_best"])
     if labels:
         best_epoch.update({ f"hyperparam_{k}": v for k, v in labels.items() })
 
     s = pd.Series(best_epoch).to_frame().T
-    return s.drop(columns=ignore_keys)
+    s = s.drop(columns=ignore_keys)
+    return s.infer_objects()
 
 
-def train_n_test_model(train, test, outpath):
-    # Grid hyperparams ..... #
+def ts2vec_cicids2017(train, test, outpath):
     dist_plot = cb.DistPlot(outpath)
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     net = NeuralNet(
-        cb.Ts2LSTM2Vec, cb.Contextual_Coherency,
-        optimizer=torch.optim.Adam, lr=5e-4, batch_size=4096,
+        cb.GRU2Vec, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
+        lr=5e-4, batch_size=4096, max_epochs=1,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             dist_plot, loss_plot,
@@ -186,12 +186,9 @@ def train_n_test_model(train, test, outpath):
 
     # Retrain on whole dataset ..... #
     net.train_split = predefined_split(test)
-    res = net.fit(train)
-    res = history2dframe(res) 
-    grid_res = res.infer_objects()
+    net.fit(train)
     
-    grid_res.to_pickle(outpath/ "train_results.pkl")
-    torch.save(net.module_.state_dict(), outpath / "ts2vec.torch")
+    return net.module_, history2dframe(net)
 
 
 # ----- ----- GRID SEARCH ----- ----- #
@@ -233,7 +230,6 @@ def grid_search(train, valid, grid_params, kfold, outpath):
         grid_res = pd.concat([grid_res, history2dframe(net, params)], ignore_index=True)    
 
     # Get best configuration ..... #
-    grid_res = grid_res.infer_objects()
     import pdb; pdb.set_trace() 
     grid_res.to_pickle(outpath / "grid_results.pkl")
 
@@ -302,12 +298,12 @@ if __name__ == "__main__":
     args.outpath.mkdir(parents=True, exist_ok=True)
 
     # Data loading ..... # 
+    timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
+    df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists():
         train, validation, test = load_dataset(dataset_cache)
     else:
-        timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
-        df = pd.read_pickle(timeseries_data)
         train, validation, test = prepare_dataset(df)
         store_dataset(train, validation, test, dataset_cache) 
 
@@ -320,6 +316,10 @@ if __name__ == "__main__":
         kf = KFold(n_splits=KFOLDS_SPLITS, shuffle=True, random_state=SEED)
         grid_search(train, validation, grid_params, kf, args.outpath)
     else:
-        train_model(train, test, args.outpath)
-
-
+        ts2vec, res = ts2vec_cicids2017(train, test, args.outpath)
+        print(res)
+        # Results visualization
+        df = df[df.index.get_level_values("_time").day == 4]
+        pr = Cicids2017Preprocessor(deltas=False, discretize=False)
+        model_input = pr.preprocessing(df, update=True)
+        cb.network2D(ts2vec, model_input, hostonly=True)

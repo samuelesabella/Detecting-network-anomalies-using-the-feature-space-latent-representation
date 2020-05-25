@@ -4,7 +4,8 @@ from skorch.callbacks import EpochScoring
 from sklearn import preprocessing
 from tqdm import tqdm
 import sys
-from umap import UMAP
+# from umap import UMAP
+from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import more_itertools as mit
 import numpy as np
@@ -34,6 +35,14 @@ BETA_2 = .4
 
 # ----- ----- DATA RESHAPING ----- ----- #
 # ----- ----- -------------- ----- ----- #
+def dfwindowed(df, wlen, step):
+    df_len = len(df)
+    wnds = mit.windowed(range(df_len), wlen, step=step)
+    wnds = filter(lambda x: None not in x, wnds)
+    wnds_values = map(lambda x: df.iloc[list(x)].reset_index(), wnds)
+    return wnds_values
+
+
 def ts_windowing(df, overlapping=.95):
     """
         ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
@@ -48,11 +57,8 @@ def ts_windowing(df, overlapping=.95):
     host_ts = df.groupby(level=['device_category', 'host'])
     for (_, host), ts in tqdm(host_ts):
         # Building context/activity windows ..... #
-        wnds = mit.windowed(range(len(ts)), CONTEXT_LEN, step=window_stepsize)
-        wnds = filter(lambda x: None not in x, wnds)
-        wnds_values = map(lambda x: ts.iloc[list(x)].reset_index(), wnds)
-        
-        for host_actv in wnds_values:
+        windows = dfwindowed(ts, CONTEXT_LEN, window_stepsize)
+        for host_actv in windows:
             context = host_actv.drop(columns=["_time", "host", "device_category", "attack"]).values
             samples["context"].append(context)
             samples["host"].append(host)
@@ -66,10 +72,6 @@ def ts_windowing(df, overlapping=.95):
     return samples
 
 
-def X2tensor(X):
-    clean_values = X.drop(columns=["_time", "host", "device_category", "attack"])
-    ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
-    return torch.Tensor(ts_values)
 
 
 def dataset2tensors(dataset):
@@ -241,6 +243,58 @@ class Ts2VecScore():
         return res
 
 
+# ----- ----- 2D DIMENSIONALITY REDUCTION ----- ----- #
+# ----- ----- --------------------------- ----- ----- #
+def df2tensor(df):
+    clean_values = df.drop(columns=["_time", "host", "device_category", "attack"])
+    ts_values = clean_values.groupby(level="sample_idx").apply(lambda x: x.values)
+    return torch.Tensor(ts_values).detach()
+
+def series_mean_time(s):
+    min_max_t = pd.Series([s["_time"].min(), s["_time"].max()], index=["start", "stop"])
+    s["_time"] = min_max_t[1] - pd.Series(min_max_t).diff().divide(2).iloc[1]
+    return s.iloc[0]
+
+
+def reduce_and_combine(ebs, meta_info):
+    # host2D = UMAP().fit_transform(ebs)
+    host2D = TSNE(n_components=2).fit_transform(ebs)
+    host2Ddf = pd.DataFrame(host2D, columns=["x1", "x2"])
+    return pd.concat([meta_info, host2Ddf], axis=1, sort=False) 
+
+
+def network2D(ts2vec, netdf, hostonly=False):
+    fcolumns = ["device_category", "host", "_time", "attack"]
+    metainfo = pd.DataFrame()
+    netinfo = defaultdict(list)
+
+    for (_, host), ts in netdf.groupby(level=["device_category", "host"]):
+        windows = list(dfwindowed(ts, ACTIVITY_LEN, ACTIVITY_LEN))
+        indexs = range(len(windows))
+        host_samples = pd.concat(windows, keys=indexs, names=["sample_idx"])
+        host_samples = host_samples.reset_index(level=1).drop("level_1", axis=1)
+        sample_tensors = df2tensor(host_samples)
+        ts_e = ts2vec.toembedding(sample_tensors).detach()
+        
+        hostinfo = host_samples[fcolumns].groupby(level="sample_idx")
+        hostinfo = hostinfo.apply(series_mean_time)
+        if hostonly:
+            proj2d = reduce_and_combine(ts_e, hostinfo)
+            metainfo = pd.concat([metainfo, proj2d])
+        else:
+            netinfo["embedding"].extend(ts_e)
+            netinfo["meta_info"].append(hostinfo)
+    
+    import pdb; pdb.set_trace() 
+    if hostonly:
+        return metainfo
+    
+    # Compute UMAP for all ..... # 
+    meta = pd.concat(netinfo["meta_info"]).reset_index()
+    embeddings = np.stack(netinfo["embedding"])
+    return reduce_and_combine(embeddings, meta)
+
+
 # ----- ----- MODELS ----- ----- #
 # ----- ----- ------ ----- ----- #
 class Ts2Vec(torch.nn.Module):
@@ -264,37 +318,6 @@ class Ts2Vec(torch.nn.Module):
         return torch.clamp(dist, 0., 1.)
 
     def to2Dmap(self, df, wlen=ACTIVITY_LEN):
-        res_map = pd.DataFrame()
-        for (dev_cat, host), ts in df.groupby(level=["device_category", "host"]):
-            # Windowing and tensorizing ..... #
-            activity_wnds = mit.windowed(range(len(ts)), wlen, step=wlen)
-            activity_wnds = filter(lambda x: None not in x, activity_wnds)
-            activity_wnds_values = list(map(lambda x: ts.iloc[list(x)], activity_wnds))
-            host_samples = pd.concat(activity_wnds_values, 
-                                     keys=range(len(activity_wnds_values)), names=["sample_idx"])
-            host_samples.reset_index(level=["host", "_time", "device_category"], inplace=True)
-            sample_tensors = X2tensor(host_samples).detach()
-            ebs = self.toembedding(sample_tensors)
-            # dimensionality reduction ..... #
-            ebs2D = UMAP().fit_transform(ebs.detach())
-            # ebs2D = TSNE(n_components=2).fit_transform(ebs.detach())
-            ebs2Ddf = pd.DataFrame(ebs2D, columns=[f"x{i}" for i in range(ebs2D.shape[1])])
-
-            # Zipping times with embeddings ..... #
-            def min_max_series(x):
-                return pd.Series([x["_time"].min(), x["_time"].max()], index=["start", "stop"])
-
-            def mean_timestamp(v):
-                t1, _  = v
-                return (t1 + pd.Series(v).diff().divide(2)).iloc[1]
-
-            sample_groups = host_samples.groupby(level="sample_idx").apply(min_max_series)
-            sample_groups = pd.concat([sample_groups, ebs2Ddf], axis=1, sort=False)
-            sample_groups_time_idx = sample_groups.apply(lambda x: mean_timestamp(x[["start", "stop"]].values), axis=1)
-            mlt_idx = pd.MultiIndex.from_tuples([(dev_cat, host, t) for t in sample_groups_time_idx])
-            sample_groups = sample_groups.set_index(mlt_idx) 
-            sample_groups = sample_groups.rename_axis(index=["device_category", "host", "time"])
-            res_map = pd.concat([res_map, sample_groups])
         return res_map
 
     def forward(self, context=None, start_time=None, end_time=None, host=None):
