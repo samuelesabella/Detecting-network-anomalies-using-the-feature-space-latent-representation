@@ -285,7 +285,6 @@ def network2D(ts2vec, netdf, hostonly=False):
             netinfo["embedding"].extend(ts_e)
             netinfo["meta_info"].append(hostinfo)
     
-    import pdb; pdb.set_trace() 
     if hostonly:
         return metainfo
     

@@ -198,7 +198,7 @@ def setparams(net, params):
         setattr(net, k, v)
 
 
-def grid_search(train, valid, grid_params, kfold, outpath):
+def grid_search(train, valid, grid_params, outpath):
     grid_res = pd.DataFrame()
     
     dist_plot = cb.DistPlot(outpath)
@@ -230,7 +230,6 @@ def grid_search(train, valid, grid_params, kfold, outpath):
         grid_res = pd.concat([grid_res, history2dframe(net, params)], ignore_index=True)    
 
     # Get best configuration ..... #
-    import pdb; pdb.set_trace() 
     grid_res.to_pickle(outpath / "grid_results.pkl")
 
 
@@ -313,8 +312,7 @@ if __name__ == "__main__":
             "batch_size": [ 2048 ],
             "max_epochs": [ 2 ],
         })
-        kf = KFold(n_splits=KFOLDS_SPLITS, shuffle=True, random_state=SEED)
-        grid_search(train, validation, grid_params, kf, args.outpath)
+        grid_search(train, validation, grid_params, args.outpath)
     else:
         ts2vec, res = ts2vec_cicids2017(train, test, args.outpath)
         print(res)
