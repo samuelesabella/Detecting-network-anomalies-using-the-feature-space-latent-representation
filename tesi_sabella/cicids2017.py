@@ -29,7 +29,7 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 VL_TS_P = .5 # Percentage of validation/test
-WINDOW_OVERLAPPING = .4
+WINDOW_OVERLAPPING = .9
 PATIENCE = 250
 KFOLDS_SPLITS = 5
 FLEVEL = "NF_BLMISC"
@@ -317,9 +317,9 @@ if __name__ == "__main__":
 
     if args.grid: 
         grid_params = ParameterGrid({
-            "lr": [ 1e-5, 1e-6, 5e-5 ],
-            "batch_size": [ 2048 ],
-            "max_epochs": [ 2 ],
+            "lr": [ 1e-3, 5e-4, 1e-4, 5e-5, 1e-5,  ],
+            "batch_size": [ 1024, 2048, 4096 ],
+            "max_epochs": [ 2600 ],
         })
         grid_search(train, validation, grid_params, args.outpath)
     else:
