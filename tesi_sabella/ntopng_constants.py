@@ -317,18 +317,26 @@ BASIC_FEATURES = BASIC_LEVEL_LOW | BASIC_LEVEL_HIGH
 FEATURES_COMPLETE = copy.deepcopy(BASIC_FEATURES)
 FEATURES_COMPLETE |= NDPI_FLOWS_COMPLETE | NDPI_BYTES_RCVD_COMPLETE | NDPI_BYTES_SENT_COMPLETE
 
+NON_DECREASING = ["dns_qry_sent_rsp_rcvd:", "dns_qry_rcvd_rsp_sent:", 
+                  "echo_packets:", "echo_reply_packets:", "host_unreachable_flows:",
+                  "misbehaving_flows:", "ndpi:", "tcp_packets:", "tcp_rx_stats:",
+                  "tcp_tx_stats:", "total_flows:", "traffic:", "udp_pkts:", "udp_sent_unicast:",
+                  "unreachable_flows:"]
+NON_DECREASING = list(filter(lambda x: any([f in x for f in NON_DECREASING]), FEATURES_COMPLETE))
+
 
 # ----- ----- FEATURES LEVELS ----- ----- #
 # ----- ----- --------------- ----- ----- #
 FEATURE_LEVELS = {
-    "high": NDPI_COMPLETE | BASIC_LEVEL_HIGH,
-    "smart": NDPI_FLOWS_COMPLETE | set({
+    "NF_BL": NDPI_FLOWS_COMPLETE | BASIC_FEATURES,
+    "NF_BLH": NDPI_FLOWS_COMPLETE | BASIC_LEVEL_HIGH,
+    "NF_BLMISC": NDPI_FLOWS_COMPLETE | set({
         "active_flows:flows_as_server", "active_flows:flows_as_client",
         "traffic:bytes_rcvd", "traffic:bytes_sent", 
         "contacts:num_as_client", "contacts:num_as_server",
         "dns_qry_sent_rsp_rcvd:replies_error_packets",
         "dns_qry_sent_rsp_rcvd:replies_ok_packets",
         }),
-    "low": BASIC_LEVEL_LOW
+    "BLL": BASIC_LEVEL_LOW
 }
 

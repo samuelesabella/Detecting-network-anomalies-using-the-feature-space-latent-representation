@@ -30,7 +30,8 @@ hour2ts = [(MORNING,   range(6,  12)),
 hour2ts = { h: t for t, hrange in hour2ts for h in hrange }
 
 class Preprocessor():
-    def __init__(self, deltas=True, discretize=True):
+    def __init__(self, deltas=True, discretize=True, flevel="NF_BLMISC"):
+        self.flevel = flevel 
         self.compute_deltas = deltas
         self.compute_discrtz = discretize
         self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=25, encode="ordinal", strategy="quantile"))
@@ -62,7 +63,7 @@ class Preprocessor():
         kbins.fit(values)
 
     def preprocessing(self, df, update=True):
-        smart_features = set(ntopng_c.FEATURE_LEVELS["smart"])
+        smart_features = set(ntopng_c.FEATURE_LEVELS[self.flevel])
         available_features = set(df.columns)
         available_cols = available_features.intersection(smart_features)
         if available_cols != smart_features:
@@ -80,7 +81,8 @@ class Preprocessor():
     
         # Non decreasing delta discretization ..... #
         if self.compute_deltas:
-            non_decreasing = [c for c in df.columns if ("traffic:" in c or "dns_qry_sent_rsp_rcvd" in c)] 
+            # Filter selected non-stationary features
+            non_decreasing = [c for c in df.columns if c in ntopng_c.NON_DECREASING]
             df[non_decreasing] = df[non_decreasing].diff()
             df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
     

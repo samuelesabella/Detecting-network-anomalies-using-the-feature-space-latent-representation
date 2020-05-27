@@ -29,9 +29,10 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 VL_TS_P = .5 # Percentage of validation/test
-WINDOW_OVERLAPPING = .9
+WINDOW_OVERLAPPING = .4
 PATIENCE = 250
 KFOLDS_SPLITS = 5
+FLEVEL = "NF_BLMISC"
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -115,7 +116,9 @@ class Cicids2017Preprocessor(generator.Preprocessor):
     def preprocessing(self, df, **kwargs):
         # Filtering hosts ..... #
         df = df[df.index.get_level_values('host').str.contains("192.168.10.")]
-        df = df.drop("dns_qry_sent_rsp_rcvd:replies_error_packets", axis=1)
+        df = df.drop(["host_unreachable_flows:flows_as_client",
+                      "dns_qry_sent_rsp_rcvd:replies_error_packets",
+                      "dns_qry_rcvd_rsp_sent:replies_error_packets"], axis=1) # All zeros in the dataset
         # Removing initial non zero traffic ..... #
         index_hours = df.index.get_level_values("_time").hour
         working_hours = (index_hours > 8) & (index_hours < 17)
@@ -235,8 +238,8 @@ def grid_search(train, valid, grid_params, outpath):
 
 # ----- ----- MAIN ----- ----- #
 # ----- ----- ---- ----- ----- #
-def prepare_dataset(df):
-    pr = Cicids2017Preprocessor()
+def prepare_dataset(df, outpath):
+    pr = Cicids2017Preprocessor(flevel=FLEVEL)
     
     # train data ..... #
     df_train = df[df.index.get_level_values("_time").day == 3]
@@ -244,6 +247,12 @@ def prepare_dataset(df):
     train = cb.ts_windowing(df_train, overlapping=WINDOW_OVERLAPPING)
     train = Dataset(*cb.dataset2tensors(train))
 
+    # Storing features metainfo ..... #
+    with open(outpath / "features.txt", "w+") as f:
+        f.write(f"{FLEVEL}\n")
+        f.write(f"---------- \n")
+        f.write("\n".join(df_train.columns))
+    
     # validation/test ..... #
     vl_ts = defaultdict(list)
     for d in [4, 5, 6, 7]:
@@ -303,7 +312,7 @@ if __name__ == "__main__":
     if dataset_cache.exists():
         train, validation, test = load_dataset(dataset_cache)
     else:
-        train, validation, test = prepare_dataset(df)
+        train, validation, test = prepare_dataset(df, args.outpath)
         store_dataset(train, validation, test, dataset_cache) 
 
     if args.grid: 
