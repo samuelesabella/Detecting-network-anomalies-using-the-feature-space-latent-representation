@@ -1,4 +1,5 @@
 from collections import defaultdict
+from sklearn.model_selection import train_test_split
 from pathlib import Path
 from sklearn.model_selection import KFold
 from sklearn.model_selection import ParameterGrid
@@ -176,7 +177,7 @@ def ts2vec_cicids2017(train, test, outpath):
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     net = NeuralNet(
         cb.GRU2Vec, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
-        lr=5e-4, batch_size=4096, max_epochs=1,
+        lr=5e-4, batch_size=512, max_epochs=1,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             dist_plot, loss_plot,
@@ -228,7 +229,7 @@ def grid_search(train, valid, grid_params, outpath):
         dist_plot.set_flabel(params)
         loss_plot.set_flabel(params)
 
-        net.train_split = predefined_split(validation) 
+        net.train_split = predefined_split(valid) 
         net.fit(train)
         grid_res = pd.concat([grid_res, history2dframe(net, params)], ignore_index=True)    
 
@@ -238,61 +239,65 @@ def grid_search(train, valid, grid_params, outpath):
 
 # ----- ----- MAIN ----- ----- #
 # ----- ----- ---- ----- ----- #
+def split2dataset(split):
+    Xlist, y = zip(*split)
+    y = torch.stack(y)
+    
+    X = {}
+    for k in Xlist[0].keys():
+        v = [x[k] for x in Xlist]
+        X[k] = torch.stack(v) if torch.is_tensor(v[0]) else torch.Tensor(v)
+
+    return Dataset(X, y)
+    
+
 def prepare_dataset(df, outpath):
     pr = Cicids2017Preprocessor(flevel=FLEVEL)
     
-    # train data ..... #
-    df_train = df[df.index.get_level_values("_time").day == 3]
-    df_train = pr.preprocessing(df_train, update=True)
-    train = cb.ts_windowing(df_train, overlapping=WINDOW_OVERLAPPING)
-    train = Dataset(*cb.dataset2tensors(train))
+    # unsupervised data ..... #
+    df_monday = df[df.index.get_level_values("_time").day == 3]
+    df_monday = pr.preprocessing(df_monday, update=True)
+    monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
+    monday = Dataset(*cb.dataset2tensors(monday))
 
     # Storing features metainfo ..... #
     with open(outpath / "features.txt", "w+") as f:
         f.write(f"{FLEVEL}\n")
         f.write(f"---------- \n")
-        f.write("\n".join(df_train.columns))
+        f.write("\n".join(df_monday.columns))
     
     # validation/test ..... #
-    vl_ts = defaultdict(list)
+    labeled_samples = defaultdict(list)
     for d in [4, 5, 6, 7]:
         df_day = df[df.index.get_level_values("_time").day == d]
         df_day_preproc = pr.preprocessing(df_day, update=False)
         day_samples = cb.ts_windowing(df_day_preproc, overlapping=WINDOW_OVERLAPPING)
-        
-        attacks_samples = np.unique(np.where(day_samples["attack"] == cb.ATTACK_TRAFFIC)[0])
-        normal_samples = np.unique(np.where(day_samples["attack"] == cb.NORMAL_TRAFFIC)[0])
-        normal_samples = np.random.choice(normal_samples, len(attacks_samples), replace=False)
 
-        subsamples = np.concatenate([normal_samples, attacks_samples])
         for k, v in day_samples.items():
-            vl_ts[k].append(v[subsamples])
-    vl_ts = { k: np.concatenate(v) for k, v in vl_ts.items() }
-    vl_ts = Dataset(*cb.dataset2tensors(vl_ts))
-    
-    # validation split ..... #
-    vl_ts_len = len(vl_ts.X["context"])
-    vl_idxs = np.random.choice(range(vl_ts_len), int(vl_ts_len * VL_TS_P), replace=False)
-    ts_idxs = list(set(range(vl_ts_len)) - set(vl_idxs))
-    
-    validation = Dataset(*vl_ts[vl_idxs])
-    test = Dataset(*vl_ts[ts_idxs])
+            labeled_samples[k].append(v)
+    labeled_samples = { k: np.concatenate(v) for k, v in labeled_samples.items() }
+    labeled_samples = Dataset(*cb.dataset2tensors(labeled_samples))
 
-    return train, validation, test 
+    # Stratified sampling for each attack ..... #
+    labeled_train, labeled_test = train_test_split(labeled_samples, test_size=0.33, random_state=SEED, stratify=labeled_samples.y)
+    labeled_train = split2dataset(labeled_train)
+    labeled_test = split2dataset(labeled_test)
+
+    return monday, labeled_train, labeled_test 
 
 
-def store_dataset(tr, vl, ts, path):
+def store_dataset(monday, labeled_train, ts, path):
     path.mkdir(parents=True, exist_ok=True)
-    cPickle.dump(tr, gzip.open(path / "tr.pkl", "wb"))
-    cPickle.dump(vl, gzip.open(path / "vl.pkl", "wb"))
-    cPickle.dump(ts, gzip.open(path / "ts.pkl", "wb"))
+    cPickle.dump(monday, gzip.open(path / "monday.pkl", "wb"))
+    cPickle.dump(labeled_train, gzip.open(path / "labeled_mondayain.pkl", "wb"))
+    cPickle.dump(labeled_test, gzip.open(path / "labeled_test.pkl", "wb"))
 
 
 def load_dataset(path):
-    tr = cPickle.load(gzip.open(path / "tr.pkl", "rb"))
-    vl = cPickle.load(gzip.open(path / "vl.pkl", "rb"))
-    ts = cPickle.load(gzip.open(path / "ts.pkl", "rb"))
-    return tr, vl, ts
+    monday = cPickle.load(gzip.open(path / "monday.pkl", "rb"))
+    labeled_mondayain = cPickle.load(gzip.open(path / "labeled_mondayain.pkl", "rb"))
+    labeled_test = cPickle.load(gzip.open(path / "labeled_test.pkl", "rb"))
+    return monday, labeled_mondayain, labeled_test
 
 
 if __name__ == "__main__":
@@ -310,10 +315,10 @@ if __name__ == "__main__":
     df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists():
-        train, validation, test = load_dataset(dataset_cache)
+        monday, labeled_train, labeled_test = load_dataset(dataset_cache)
     else:
-        train, validation, test = prepare_dataset(df, args.outpath)
-        store_dataset(train, validation, test, dataset_cache) 
+        monday, labeled_train, labeled_test = prepare_dataset(df, args.outpath)
+        store_dataset(monday, labeled_train, labeled_test, dataset_cache) 
 
     if args.grid: 
         grid_params = ParameterGrid({
@@ -321,12 +326,8 @@ if __name__ == "__main__":
             "batch_size": [ 1024, 2048, 4096 ],
             "max_epochs": [ 2600 ],
         })
-        grid_search(train, validation, grid_params, args.outpath)
+        grid_search(monday, labeled_train, grid_params, args.outpath)
     else:
-        ts2vec, res = ts2vec_cicids2017(train, test, args.outpath)
+        ts2vec, res = ts2vec_cicids2017(monday, labeled_test, args.outpath)
+        torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")
         print(res)
-        # Results visualization
-        df = df[df.index.get_level_values("_time").day == 4]
-        pr = Cicids2017Preprocessor(deltas=False, discretize=False)
-        model_input = pr.preprocessing(df, update=True)
-        cb.network2D(ts2vec, model_input, hostonly=True)
