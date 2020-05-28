@@ -162,7 +162,7 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- ----------- ----- ----- #
 def history2dframe(net, labels=None):
     ignore_keys = ["batches", "train_batch_count", "valid_batch_count"]
-    best_epoch = next(x for x in net.history if x["valid_loss_best"])
+    best_epoch = next(x for x in reversed(net.history) if x["valid_loss_best"])
     if labels:
         best_epoch.update({ f"hyperparam_{k}": v for k, v in labels.items() })
 
