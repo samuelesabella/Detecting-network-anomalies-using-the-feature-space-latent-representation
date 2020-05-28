@@ -335,11 +335,11 @@ class Ts2Vec(torch.nn.Module):
 class GRU2Vec(Ts2Vec):
     def __init__(self):
         super(GRU2Vec, self).__init__() 
-        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(input_size=62, hidden_size=80, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(80, 128),
+            nn.Linear(80, 64),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(64, 64),
             nn.ReLU())
 
     def toembedding(self, x):

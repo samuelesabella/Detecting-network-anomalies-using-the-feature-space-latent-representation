@@ -30,7 +30,7 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 VL_TS_P = .5 # Percentage of validation/test
-WINDOW_OVERLAPPING = .9
+WINDOW_OVERLAPPING = .95
 PATIENCE = 250
 KFOLDS_SPLITS = 5
 FLEVEL = "NF_BLMISC"
@@ -233,8 +233,8 @@ def grid_search(train, valid, grid_params, outpath):
         net.fit(train)
         grid_res = pd.concat([grid_res, history2dframe(net, params)], ignore_index=True)    
 
-    # Get best configuration ..... #
-    grid_res.to_pickle(outpath / "grid_results.pkl")
+        # Get best configuration ..... #
+        grid_res.to_pickle(outpath / "grid_results.pkl")
 
 
 # ----- ----- MAIN ----- ----- #
@@ -322,7 +322,7 @@ if __name__ == "__main__":
 
     if args.grid: 
         grid_params = ParameterGrid({
-            "lr": [ 1e-3, 5e-4, 1e-4, 5e-5, 1e-5,  ],
+            "lr": [ 1e-3, 5e-4, 1e-4, 5e-5, 1e-5 ],
             "batch_size": [ 1024, 2048, 4096 ],
             "max_epochs": [ 2600 ],
         })
