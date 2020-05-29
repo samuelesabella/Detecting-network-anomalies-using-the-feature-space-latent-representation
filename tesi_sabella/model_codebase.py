@@ -78,9 +78,9 @@ def dataset2tensors(dataset):
     Y = torch.Tensor(dataset["attack"])
     del dataset["attack"]
 
-    if torch.cuda.is_available():
-        dataset["context"] = dataset["context"].cuda()
-        Y = Y.cuda()
+    # if torch.cuda.is_available():
+    #     dataset["context"] = dataset["context"].cuda()
+    #     Y = Y.cuda()
     return dataset, Y
 
 

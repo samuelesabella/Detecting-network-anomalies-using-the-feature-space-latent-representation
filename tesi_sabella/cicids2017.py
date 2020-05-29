@@ -300,6 +300,11 @@ def load_dataset(path):
     return monday, labeled_mondayain, labeled_test
 
 
+def Dataset2GPU(dataset):
+    dataset.X["context"] = dataset.X["context"].cuda()
+    dataset.y = dataset.y.cuda()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
@@ -319,6 +324,9 @@ if __name__ == "__main__":
     else:
         monday, labeled_train, labeled_test = prepare_dataset(df, args.outpath)
         store_dataset(monday, labeled_train, labeled_test, dataset_cache) 
+
+    Dataset2GPU(monday); 
+    Dataset2GPU(labeled_train); Dataset2GPU(labeled_test)
 
     if args.grid: 
         grid_params = ParameterGrid({
