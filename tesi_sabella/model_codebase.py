@@ -137,6 +137,10 @@ def find_neg_anchors(e_actv, context, start_time, end_time, host):
     # Computing distance matrix
     n = len(e_actv)
     dm = torch.pdist(e_actv)
+    eye = torch.eye(n, n)
+    if torch.cuda.is_available():
+        eye = eye.cuda()
+        dm = dm.cuda()
     # Converting tu full nxn matrix
     tri = torch.zeros((n, n))
     tri[np.triu_indices(n, 1)] = dm

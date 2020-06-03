@@ -277,7 +277,9 @@ def prepare_dataset(df, outpath):
     labeled_samples = Dataset(*cb.dataset2tensors(labeled_samples))
 
     # Stratified sampling for each attack ..... #
-    labeled_train, labeled_test = train_test_split(labeled_samples, test_size=0.33, random_state=SEED, stratify=labeled_samples.y)
+    devlabels = labeled_samples.y.cuda() if torch.cuda.is_available() else labeled_samples.y
+    labeled_train, labeled_test = train_test_split(labeled_samples, test_size=0.33, 
+                                                   random_state=SEED, stratify=devlabels)
     labeled_train = split2dataset(labeled_train)
     labeled_test = split2dataset(labeled_test)
 
