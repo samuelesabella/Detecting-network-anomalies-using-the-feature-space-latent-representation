@@ -29,10 +29,8 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-VL_TS_P = .5 # Percentage of validation/test
 WINDOW_OVERLAPPING = .95
 PATIENCE = 250
-KFOLDS_SPLITS = 5
 FLEVEL = "NF_BLMISC"
 
 
@@ -301,8 +299,9 @@ def load_dataset(path):
 
 
 def Dataset2GPU(dataset):
-    dataset.X["context"] = dataset.X["context"].cuda()
-    dataset.y = dataset.y.cuda()
+    if torch.cuda.is_available():
+        dataset.X["context"] = dataset.X["context"].cuda()
+        dataset.y = dataset.y.cuda()
 
 
 if __name__ == "__main__":
@@ -338,4 +337,3 @@ if __name__ == "__main__":
     else:
         ts2vec, res = ts2vec_cicids2017(monday, labeled_test, args.outpath)
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")
-        print(res)

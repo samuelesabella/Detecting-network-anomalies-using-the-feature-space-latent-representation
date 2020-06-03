@@ -117,18 +117,18 @@ def random_sublist(l, sub_wlen):
 def filter_distances(current_idx, distances, start_time, end_time, host):
     """Select the minimum above a threshold {th1} and in time range
     """
-    distances = distances.detach().numpy()
+    distances = distances.detach()
 
     delay_before = (end_time - start_time[current_idx]) // 3600
     delay_after = (end_time[current_idx] - start_time) // 3600
     delays = torch.stack([delay_before, delay_after]).max(dim=0)[0]
-    delay_mask = (delays >= 1).cpu().numpy()
-    host_mask = (host != host[current_idx]).cpu().numpy()
+    delay_mask = (delays >= 1)
+    host_mask = (host != host[current_idx])
     
     if host_mask.any():
-        valid_idx = np.where(host_mask & (distances > BETA_1))[0]
+        valid_idx = torch.where(host_mask & (distances > BETA_1))[0]
     else:
-        valid_idx = np.where(delay_mask & (distances > BETA_1))[0]
+        valid_idx = torch.where(delay_mask & (distances > BETA_1))[0]
     
     return valid_idx[distances[valid_idx].argmin()]
 
@@ -139,7 +139,7 @@ def find_neg_anchors(e_actv, context, start_time, end_time, host):
     dm = torch.pdist(e_actv)
     # Converting tu full nxn matrix
     tri = torch.zeros((n, n))
-    tri[np.triu_indices(n, 1)] = dm.cpu()
+    tri[np.triu_indices(n, 1)] = dm
     fmatrix = torch.tril(tri.T, 1) + tri
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
@@ -335,7 +335,7 @@ class Ts2Vec(torch.nn.Module):
 class GRU2Vec(Ts2Vec):
     def __init__(self):
         super(GRU2Vec, self).__init__() 
-        self.rnn = nn.GRU(input_size=62, hidden_size=80, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(80, 64),
             nn.ReLU(),
