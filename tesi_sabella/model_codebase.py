@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-torch.set_default_dtype(torch.float64)
+torch.set_default_dtype(torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -78,9 +78,6 @@ def dataset2tensors(dataset):
     Y = torch.Tensor(dataset["attack"])
     del dataset["attack"]
 
-    # if torch.cuda.is_available():
-    #     dataset["context"] = dataset["context"].cuda()
-    #     Y = Y.cuda()
     return dataset, Y
 
 
@@ -114,33 +111,17 @@ def random_sublist(l, sub_wlen):
     return l.iloc[r:r+sub_wlen]
 
 
-def filter_distances(current_idx, distances, start_time, end_time, host):
-    """Select the minimum above a threshold {th1} and in time range
-    """
-    distances = distances.detach()
-
-    delay_before = (end_time - start_time[current_idx]) // 3600
-    delay_after = (end_time[current_idx] - start_time) // 3600
-    delays = torch.stack([delay_before, delay_after]).max(dim=0)[0]
-    delay_mask = (delays >= 1)
-    host_mask = (host != host[current_idx])
-    
-    if host_mask.any():
-        valid_idx = torch.where(host_mask & (distances > BETA_1))[0]
-    else:
-        valid_idx = torch.where(delay_mask & (distances > BETA_1))[0]
-    
-    return valid_idx[distances[valid_idx].argmin()]
+def fast_filter(distances, host):
+    full_host = torch.stack([host]*len(host))
+    diff_host = (full_host == full_host.T)
+    distances[diff_host] = sys.maxsize
+    return distances.argmin(axis=1)
 
 
 def find_neg_anchors(e_actv, context, start_time, end_time, host):
     # Computing distance matrix
     n = len(e_actv)
     dm = torch.pdist(e_actv)
-    eye = torch.eye(n, n)
-    if torch.cuda.is_available():
-        eye = eye.cuda()
-        dm = dm.cuda()
     # Converting tu full nxn matrix
     tri = torch.zeros((n, n))
     tri[np.triu_indices(n, 1)] = dm
@@ -148,11 +129,9 @@ def find_neg_anchors(e_actv, context, start_time, end_time, host):
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
     # Getting the minimum
-    idxs = [filter_distances(i, row, start_time, end_time, host) for i, row in enumerate(fmatrix)]
-    dn = torch.stack([e_actv[i] for i in idxs])
+    idxs = fast_filter(fmatrix, host) 
+    dn = e_actv[idxs]
     
-    if torch.cuda.is_available():
-        return dn.cuda()
     return dn
 
 
@@ -238,8 +217,6 @@ class Ts2VecScore():
     def __call__(self, net, dset=None, y=None):
         with torch.no_grad():
             y_hat = net.module_.context_anomaly(dset.X["context"])
-            if y_hat.is_cuda:
-                y_hat = y_hat.cpu()
         res = self.measure(y, np.round(y_hat))
         return res
 
