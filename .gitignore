@@ -4,9 +4,12 @@ venv/
 **/.vim
 **/datasets/
 tmp/
+res/
 
 **/.ipynb_checkpoints
 **/.ipynb
 
 dataset/
 notebooks/imgs/
+
+**/pyfluxc
