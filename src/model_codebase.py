@@ -25,8 +25,8 @@ torch.set_default_dtype(torch.cuda.DoubleTensor if torch.cuda.is_available() els
 NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
-CONTEXT_LEN = 56
-ACTIVITY_LEN = 28
+CONTEXT_LEN = 56 # context window length, 14 minutes with 4spm (sample per minutes) 
+ACTIVITY_LEN = 28 # activity window length, 7 minutes 
 
 # Triplet margins
 BETA_1 = .2
@@ -45,10 +45,8 @@ def dfwindowed(df, wlen, step):
 
 def ts_windowing(df, overlapping=.95):
     """
-        ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
-        actv_len  --  activity window length, 7 minutes
-        overlapping -- context windowing overlapping
-        consistency_range  --  activity within this range are considered consistent
+    overlapping -- context windowing overlapping
+    consistency_range  --  activity within this range are considered consistent
     """
     samples = defaultdict(list)
     window_stepsize = max(int(CONTEXT_LEN * (1 - overlapping)), 1) 
@@ -58,14 +56,14 @@ def ts_windowing(df, overlapping=.95):
     for (_, host), ts in tqdm(host_ts):
         # Building context/activity windows ..... #
         windows = dfwindowed(ts, CONTEXT_LEN, window_stepsize)
-        for host_actv in windows:
-            context = host_actv.drop(columns=["_time", "host", "device_category", "attack"]).values
-            samples["context"].append(context)
+        for host_contexts in windows:
+            ctx = host_contexts.drop(columns=["_time", "host", "device_category", "attack"]).values
+            samples["context"].append(ctx)
             samples["host"].append(host)
-            samples["start_time"].append(host_actv["_time"].min().timestamp())
-            samples["end_time"].append(host_actv["_time"].max().timestamp())
+            samples["start_time"].append(host_contexts["_time"].min().timestamp())
+            samples["end_time"].append(host_contexts["_time"].max().timestamp())
 
-            activity_attack = NORMAL_TRAFFIC if (host_actv["attack"]=="none").all() else ATTACK_TRAFFIC
+            activity_attack = NORMAL_TRAFFIC if (host_contexts["attack"]=="none").all() else ATTACK_TRAFFIC
             samples["attack"].append(activity_attack)
     
     samples = { k: np.stack(v) for k, v in samples.items() }
@@ -119,6 +117,8 @@ def fast_filter(distances, host):
 
 
 def find_neg_anchors(e_actv, context, start_time, end_time, host):
+    """find negative anchors within a batch
+    """
     # Computing distance matrix
     n = len(e_actv)
     dm = torch.pdist(e_actv)
@@ -243,8 +243,8 @@ def series_mean_time(s):
 
 
 def reduce_and_combine(meta_info, ebs):
-    # host2D = UMAP().fit_transform(ebs)
-    host2D = TSNE(n_components=2).fit_transform(ebs)
+    host2D = UMAP().fit_transform(ebs)
+    # host2D = TSNE(n_components=2).fit_transform(ebs)
     host2Ddf = pd.DataFrame(host2D, columns=["x1", "x2"])
     return pd.concat([meta_info, host2Ddf], axis=1, sort=False) 
 
@@ -282,11 +282,8 @@ def network2D(ts2vec, netdf, overlapping=0.):
 
 # ----- ----- MODELS ----- ----- #
 # ----- ----- ------ ----- ----- #
-class Ts2Vec(torch.nn.Module):
+class AnchorTs2Vec(torch.nn.Module):
     def toembedding(self, x):
-        raise NotImplementedError()
-
-    def forward(self, activity=None, context=None, coherency_activity=None):
         raise NotImplementedError()
 
     def context_anomaly(self, ctx):
@@ -313,9 +310,9 @@ class Ts2Vec(torch.nn.Module):
         return (e_actv, e_ap, e_an)
 
 
-class GRU2Vec(Ts2Vec):
+class STC(AnchorTs2Vec):
     def __init__(self):
-        super(GRU2Vec, self).__init__() 
+        super(STC, self).__init__() 
         self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(80, 64),
