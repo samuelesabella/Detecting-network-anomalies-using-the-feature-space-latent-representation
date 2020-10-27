@@ -31,7 +31,7 @@ np.random.seed(SEED)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WINDOW_OVERLAPPING = .95
 PATIENCE = 250
-FLEVEL = "NF_BLMISC"
+FLEVEL = "MAGIK"
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -175,7 +175,7 @@ def ts2vec_cicids2017(train, test, outpath):
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     net = NeuralNet(
         cb.GRU2Vec, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
-        lr=5e-4, batch_size=512, max_epochs=1,
+        lr=5e-4, batch_size=1024, max_epochs=524,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             dist_plot, loss_plot,
@@ -317,7 +317,7 @@ if __name__ == "__main__":
     args.outpath.mkdir(parents=True, exist_ok=True)
 
     # Data loading ..... # 
-    timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
+    timeseries_data = args.datapath / "cicids2017_timeseries_labeled.pkl"
     df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists():

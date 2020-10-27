@@ -298,6 +298,12 @@ BASIC_LEVEL_LOW = set({
     "udp_pkts:packets_rcvd", "udp_pkts:packets_sent",
     "udp_sent_unicast:bytes_sent_non_unicast", "udp_sent_unicast:bytes_sent_unicast"})
 
+SIX_IS_THE_MAGIK_NUM = set({
+    "active_flows:flows_as_client", "active_flows:flows_as_server",
+    "unreachable_flows:flows_as_client", "unreachable_flows:flows_as_server",
+    "misbehaving_flows:flows_as_client", "misbehaving_flows:flows_as_server",
+})
+
 BASIC_LEVEL_HIGH = set({
     "active_flows:flows_as_client", "active_flows:flows_as_server",
     "total_flows:flows_as_client", "total_flows:flows_as_server",
@@ -328,6 +334,7 @@ NON_DECREASING = list(filter(lambda x: any([f in x for f in NON_DECREASING]), FE
 # ----- ----- FEATURES LEVELS ----- ----- #
 # ----- ----- --------------- ----- ----- #
 FEATURE_LEVELS = {
+    "MAGIK": SIX_IS_THE_MAGIK_NUM,
     "NF_BL": NDPI_FLOWS_COMPLETE | BASIC_FEATURES,
     "NF_BLH": NDPI_FLOWS_COMPLETE | BASIC_LEVEL_HIGH,
     "NF_BLMISC": NDPI_FLOWS_COMPLETE | set({
