@@ -317,7 +317,7 @@ if __name__ == "__main__":
     args.outpath.mkdir(parents=True, exist_ok=True)
 
     # Data loading ..... # 
-    timeseries_data = args.datapath / "cicids2017_timeseries_labeled.pkl"
+    timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
     df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists():
