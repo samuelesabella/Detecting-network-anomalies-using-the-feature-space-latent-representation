@@ -29,8 +29,8 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .95
-PATIENCE = 250
+WINDOW_OVERLAPPING = .75
+PATIENCE = 750
 FLEVEL = "MAGIK"
 
 
@@ -175,7 +175,8 @@ def ts2vec_cicids2017(train, test, outpath):
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     net = NeuralNet(
         cb.GRU2Vec, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
-        lr=5e-4, batch_size=1024, max_epochs=524,
+        iterator_train__shuffle=True,
+        lr=5e-5, batch_size=4090, max_epochs=4000,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             dist_plot, loss_plot,
@@ -208,6 +209,7 @@ def grid_search(train, valid, grid_params, outpath):
     net = NeuralNet(
         cb.GRU2Vec, cb.Contextual_Coherency, 
         optimizer=torch.optim.Adam, device=DEVICE,
+        iterator_train__shuffle=True,
         verbose=1, train_split=None,
         callbacks=[
             dist_plot, loss_plot,
@@ -277,9 +279,8 @@ def prepare_dataset(df, outpath):
     labeled_samples = Dataset(*cb.dataset2tensors(labeled_samples))
 
     # Stratified sampling for each attack ..... #
-    devlabels = labeled_samples.y.cuda() if torch.cuda.is_available() else labeled_samples.y
     labeled_train, labeled_test = train_test_split(labeled_samples, test_size=0.33, 
-                                                   random_state=SEED, stratify=devlabels)
+                                                   random_state=SEED, stratify=labeled_samples.y.cpu())
     labeled_train = split2dataset(labeled_train)
     labeled_test = split2dataset(labeled_test)
 
