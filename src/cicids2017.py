@@ -151,6 +151,8 @@ class CICIDS2017(generator.FluxDataGenerator):
             "192.168.10.14": "pc",
             "192.168.10.15": "pc",
             "192.168.10.25": "pc",
+
+            "192.168.10.255": "broadcast",
         })
 
     def category_map(self, new_samples):
