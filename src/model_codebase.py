@@ -122,6 +122,10 @@ def fast_filter(distances, discriminator):
     discr_matrix = torch.stack([discriminator]*len(discriminator))
     same_discr = (discr_matrix == discr_matrix.T)
     distances[same_discr] = sys.maxsize
+
+    # semi-hard triplet mining
+    distances[distances < BETA_1] = sys.maxsize-1
+
     return distances.argmin(axis=1)
 
 
