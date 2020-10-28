@@ -55,18 +55,24 @@ def ts_windowing(df, overlapping=.95):
 
     logging.debug("Windowing time series for each host")
     host_ts = df.groupby(level=['device_category', 'host'])
-    for (_, host), ts in tqdm(host_ts):
+    for (device_category, host), ts in tqdm(host_ts):
         # Building context/activity windows ..... #
         windows = dfwindowed(ts, CONTEXT_LEN, window_stepsize)
-        for host_actv in windows:
-            context = host_actv.drop(columns=["_time", "host", "device_category", "attack"]).values
-            samples["context"].append(context)
+        for context in windows:
+            ctxvalues = context.drop(columns=["_time", "host", "device_category", "attack"]).values
+            samples["context"].append(ctxvalues)
             samples["host"].append(host)
-            samples["start_time"].append(host_actv["_time"].min().timestamp())
-            samples["end_time"].append(host_actv["_time"].max().timestamp())
+            samples["device_category"].append(device_category)
+            samples["start_time"].append(context["_time"].min().timestamp())
+            samples["end_time"].append(context["_time"].max().timestamp())
 
-            activity_attack = NORMAL_TRAFFIC if (host_actv["attack"]=="none").all() else ATTACK_TRAFFIC
-            samples["attack"].append(activity_attack)
+            # activity_attack = NORMAL_TRAFFIC if (context["attack"]=="none").all() else ATTACK_TRAFFIC
+            actv1_no_attack = (context[:ACTIVITY_LEN]["attack"]=="none").any()
+            actv2_attack = (context[ACTIVITY_LEN:]["attack"]!="none").any()
+
+            actv1_attack = (context[:ACTIVITY_LEN]["attack"]!="none").any()
+            actv2_no_attack = (context[ACTIVITY_LEN:]["attack"]=="none").any()
+            samples["attack"].append(actv1_no_attack and actv2_attack) # Ps: anomaly no attack
     
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
@@ -75,6 +81,7 @@ def dataset2tensors(dataset):
     dataset["context"] = torch.Tensor(dataset["context"])
     # Host to id
     dataset["host"] = preprocessing.LabelEncoder().fit_transform(dataset["host"])
+    dataset["device_category"] = preprocessing.LabelEncoder().fit_transform(dataset["device_category"])
     Y = torch.Tensor(dataset["attack"])
     del dataset["attack"]
 
@@ -111,14 +118,14 @@ def random_sublist(l, sub_wlen):
     return l.iloc[r:r+sub_wlen]
 
 
-def fast_filter(distances, host):
-    full_host = torch.stack([host]*len(host))
-    diff_host = (full_host == full_host.T)
-    distances[diff_host] = sys.maxsize
+def fast_filter(distances, discriminator):
+    discr_matrix = torch.stack([discriminator]*len(discriminator))
+    same_discr = (discr_matrix == discr_matrix.T)
+    distances[same_discr] = sys.maxsize
     return distances.argmin(axis=1)
 
 
-def find_neg_anchors(e_actv, context, start_time, end_time, host):
+def find_neg_anchors(e_actv, context, start_time, end_time, host, device_category):
     # Computing distance matrix
     n = len(e_actv)
     dm = torch.pdist(e_actv)
@@ -129,7 +136,7 @@ def find_neg_anchors(e_actv, context, start_time, end_time, host):
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
     # Getting the minimum
-    idxs = fast_filter(fmatrix, host) 
+    idxs = fast_filter(fmatrix, device_category) 
     dn = e_actv[idxs]
     
     return dn
@@ -302,14 +309,14 @@ class Ts2Vec(torch.nn.Module):
         dist = (torch.norm(e_a1 - e_a2, p=2, dim=1) - BETA_1) / BETA_2
         return torch.clamp(dist, 0., 1.)
 
-    def forward(self, context=None, start_time=None, end_time=None, host=None):
+    def forward(self, context=None, device_category=None, start_time=None, end_time=None, host=None):
         actv = context[:, :ACTIVITY_LEN]
         e_actv = self.toembedding(actv) 
 
         with torch.no_grad():
             ap = context[:, ACTIVITY_LEN:] 
             e_ap = self.toembedding(ap)
-            e_an = find_neg_anchors(e_actv, context, start_time, end_time, host)
+            e_an = find_neg_anchors(e_actv, context, start_time, end_time, host, device_category)
         return (e_actv, e_ap, e_an)
 
 
