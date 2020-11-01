@@ -16,3 +16,5 @@ notebooks/imgs/
 
 lab/pcaps/*.pcap
 lab/influx_backup/*.backup
+
+**/keys

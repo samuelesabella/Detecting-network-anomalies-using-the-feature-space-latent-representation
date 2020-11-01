@@ -241,7 +241,7 @@ if __name__ == "__main__":
         "credentials": ntopng_credentials
     }
     
-    fclient = flux.FluxClient(host="127.0.0.1", port=args.port); 
+    fclient = flux.FluxClient(host="127.0.0.1", port=args.influxport); 
     start = pd.Timestamp.utcnow() - pd.DateOffset(minutes=args.every)
     generator = FluxDataGenerator(args.bucket, "15s", fclient, start, ntopng_conf)
 
