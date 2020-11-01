@@ -326,7 +326,7 @@ class STC(AnchorTs2Vec):
         super(STC, self).__init__() 
         self.rnn = nn.GRU(input_size=11, hidden_size=32, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(64, 32),
+            nn.Linear(32, 32),
             nn.ReLU(),
             nn.Linear(32, 16),
             nn.ReLU())
