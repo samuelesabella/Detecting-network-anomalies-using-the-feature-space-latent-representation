@@ -84,9 +84,9 @@ class Preprocessor():
         if self.compute_deltas:
             # Filter selected non-stationary features
             non_decreasing = [c for c in df.columns if c in ntopng_c.NON_DECREASING]
-            df[non_decreasing] = df[non_decreasing].diff()
-            df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
-    
+            df[non_decreasing] = df[non_decreasing].groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.diff())
+            df = df.fillna(0)
+        
         # Feature discretization ..... #
         # Note: we avoided using pandas qcut/cut due to the decoupling between fit and transform 
         #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
