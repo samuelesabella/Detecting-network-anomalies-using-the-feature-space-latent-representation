@@ -70,7 +70,8 @@ class Preprocessor():
             missing_c = smart_features - available_cols
             logging.warning(f"Missing columns: {missing_c}")
         df = df[available_cols].copy(deep=True)
-        df = df.fillna(0) # Note: there are also zeroes which corresponds to NaN
+        df[df<0] = 0
+        df = df.fillna(0)
         df = Preprocessor.fillzero(df)
     
         # DPI unit length normalization ..... #

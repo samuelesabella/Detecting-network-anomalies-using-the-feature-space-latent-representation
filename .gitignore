@@ -13,3 +13,6 @@ dataset/
 notebooks/imgs/
 
 **/pyfluxc
+
+lab/pcaps/*.pcap
+lab/influx_backup/*.backup

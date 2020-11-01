@@ -29,9 +29,9 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .95
-PATIENCE = 250
-FLEVEL = "NF_BLMISC"
+WINDOW_OVERLAPPING = .75
+PATIENCE = 750
+FLEVEL = "MAGIK"
 
 LOSS = cb.Contextual_Coherency
 
@@ -153,6 +153,8 @@ class CICIDS2017(generator.FluxDataGenerator):
             "192.168.10.14": "pc",
             "192.168.10.15": "pc",
             "192.168.10.25": "pc",
+
+            "192.168.10.255": "broadcast",
         })
 
     def category_map(self, new_samples):
@@ -281,9 +283,8 @@ def prepare_dataset(df, outpath):
     labeled_samples = Dataset(*cb.dataset2tensors(labeled_samples))
 
     # Stratified sampling for each attack ..... #
-    devlabels = labeled_samples.y.cuda() if torch.cuda.is_available() else labeled_samples.y
     labeled_train, labeled_test = train_test_split(labeled_samples, test_size=0.33, 
-                                                   random_state=SEED, stratify=devlabels)
+                                                   random_state=SEED, stratify=labeled_samples.y.cpu())
     labeled_train = split2dataset(labeled_train)
     labeled_test = split2dataset(labeled_test)
 
