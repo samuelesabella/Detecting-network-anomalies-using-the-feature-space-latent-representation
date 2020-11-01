@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-torch.set_default_dtype(torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.float64)
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -25,8 +25,8 @@ torch.set_default_dtype(torch.cuda.DoubleTensor if torch.cuda.is_available() els
 NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
-CONTEXT_LEN = 56 # context window length, 14 minutes with 4spm (sample per minutes) 
-ACTIVITY_LEN = 28 # activity window length, 7 minutes 
+CONTEXT_LEN = 112 # context window length, 14 minutes with 4spm (sample per minutes) 
+ACTIVITY_LEN = 56 # activity window length, 7 minutes 
 
 # Triplet margins
 BETA_1 = .2
@@ -70,7 +70,8 @@ def ts_windowing(df, overlapping=.95):
 
             actv1_attack = (context[:ACTIVITY_LEN]["attack"]!="none").any()
             actv2_no_attack = (context[ACTIVITY_LEN:]["attack"]=="none").any()
-            samples["attack"].append(actv1_no_attack and actv2_attack) # Ps: anomaly no attack
+            is_anomaly = (actv1_no_attack and actv2_attack) or (actv1_attack and actv2_no_attack)
+            samples["attack"].append(is_anomaly) # Ps: anomaly no attack
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
 
@@ -121,12 +122,12 @@ def fast_filter(distances, discriminator):
     distances[same_discr] = sys.maxsize
 
     # semi-hard triplet mining
-    distances[distances < BETA_1] = sys.maxsize-1
+    # distances[distances < BETA_1] = sys.maxsize-1
 
     return distances.argmin(axis=1)
 
 
-def find_neg_anchors(e_actv, context, start_time, end_time, host, device_category):
+def find_neg_anchors(e_actv, e_ap, start_time, end_time, host, device_category):
     """find negative anchors within a batch
     """
     # Computing distance matrix
@@ -227,7 +228,7 @@ class Ts2VecScore():
     def __call__(self, net, dset=None, y=None):
         with torch.no_grad():
             y_hat = net.module_.context_anomaly(dset.X["context"])
-        res = self.measure(y, np.round(y_hat))
+        res = self.measure(y, np.round(y_hat.cpu()))
         return res
 
 
@@ -316,18 +317,18 @@ class AnchorTs2Vec(torch.nn.Module):
         with torch.no_grad():
             ap = context[:, ACTIVITY_LEN:] 
             e_ap = self.toembedding(ap)
-            e_an = find_neg_anchors(e_actv, context, start_time, end_time, host, device_category)
+            e_an = find_neg_anchors(e_actv, e_ap, start_time, end_time, host, device_category)
         return (e_actv, e_ap, e_an)
 
 
 class STC(AnchorTs2Vec):
     def __init__(self):
         super(STC, self).__init__() 
-        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(input_size=11, hidden_size=32, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Linear(32, 32),
+            nn.Linear(32, 16),
             nn.ReLU())
 
     def toembedding(self, x):

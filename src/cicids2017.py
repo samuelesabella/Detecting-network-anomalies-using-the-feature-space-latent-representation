@@ -180,7 +180,7 @@ def ts2vec_cicids2017(train, test, outpath):
     net = NeuralNet(
         cb.STC, LOSS, optimizer=torch.optim.Adam, 
         iterator_train__shuffle=True,
-        lr=5e-4, batch_size=512, max_epochs=1,
+        lr=1e-4, batch_size=6090, max_epochs=4000,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             dist_plot, loss_plot,
@@ -188,7 +188,7 @@ def ts2vec_cicids2017(train, test, outpath):
             cb.Ts2VecScore(skmetrics.recall_score).epoch_score(),
             cb.Ts2VecScore(skmetrics.precision_score).epoch_score(),
             cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score(),
-            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+            # EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
 
     # Retrain on whole dataset ..... #
@@ -256,11 +256,11 @@ def split2dataset(split):
     
 
 def prepare_dataset(df, outpath):
-    pr = Cicids2017Preprocessor(flevel=FLEVEL)
+    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
     
     # unsupervised data ..... #
     df_monday = df[df.index.get_level_values("_time").day == 3]
-    df_monday = pr.preprocessing(df_monday, update=True)
+    df_monday = pr.preprocessing(df_monday, update=False)
     monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
     monday = Dataset(*cb.dataset2tensors(monday))
 
