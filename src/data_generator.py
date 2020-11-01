@@ -88,7 +88,7 @@ class Preprocessor():
             df = df.groupby(level=["device_category", "host"], group_keys=False).apply(lambda group: group.iloc[1:])
     
         # Feature discretization ..... #
-        # Note: it was avoided using pandas qcut/cut due to the decoupling between fit and transform 
+        # Note: we avoided using pandas qcut/cut due to the decoupling between fit and transform 
         #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
         #       with weekly data and used multiple times while the model is running
         non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]

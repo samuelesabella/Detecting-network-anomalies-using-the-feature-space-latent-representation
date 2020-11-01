@@ -25,8 +25,8 @@ torch.set_default_dtype(torch.cuda.DoubleTensor if torch.cuda.is_available() els
 NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
-CONTEXT_LEN = 56
-ACTIVITY_LEN = 28
+CONTEXT_LEN = 56 # context window length, 14 minutes with 4spm (sample per minutes) 
+ACTIVITY_LEN = 28 # activity window length, 7 minutes 
 
 # Triplet margins
 BETA_1 = .2
@@ -45,10 +45,8 @@ def dfwindowed(df, wlen, step):
 
 def ts_windowing(df, overlapping=.95):
     """
-        ctx_len   --  context window length, 14 minutes with 4spm (sample per minutes)
-        actv_len  --  activity window length, 7 minutes
-        overlapping -- context windowing overlapping
-        consistency_range  --  activity within this range are considered consistent
+    overlapping -- context windowing overlapping
+    consistency_range  --  activity within this range are considered consistent
     """
     samples = defaultdict(list)
     window_stepsize = max(int(CONTEXT_LEN * (1 - overlapping)), 1) 
@@ -73,7 +71,6 @@ def ts_windowing(df, overlapping=.95):
             actv1_attack = (context[:ACTIVITY_LEN]["attack"]!="none").any()
             actv2_no_attack = (context[ACTIVITY_LEN:]["attack"]=="none").any()
             samples["attack"].append(actv1_no_attack and actv2_attack) # Ps: anomaly no attack
-    
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
 
@@ -130,6 +127,8 @@ def fast_filter(distances, discriminator):
 
 
 def find_neg_anchors(e_actv, context, start_time, end_time, host, device_category):
+    """find negative anchors within a batch
+    """
     # Computing distance matrix
     n = len(e_actv)
     dm = torch.pdist(e_actv)
@@ -254,8 +253,8 @@ def series_mean_time(s):
 
 
 def reduce_and_combine(meta_info, ebs):
-    # host2D = UMAP().fit_transform(ebs)
-    host2D = TSNE(n_components=2).fit_transform(ebs)
+    host2D = UMAP().fit_transform(ebs)
+    # host2D = TSNE(n_components=2).fit_transform(ebs)
     host2Ddf = pd.DataFrame(host2D, columns=["x1", "x2"])
     return pd.concat([meta_info, host2Ddf], axis=1, sort=False) 
 
@@ -293,11 +292,8 @@ def network2D(ts2vec, netdf, overlapping=0.):
 
 # ----- ----- MODELS ----- ----- #
 # ----- ----- ------ ----- ----- #
-class Ts2Vec(torch.nn.Module):
+class AnchorTs2Vec(torch.nn.Module):
     def toembedding(self, x):
-        raise NotImplementedError()
-
-    def forward(self, activity=None, context=None, coherency_activity=None):
         raise NotImplementedError()
 
     def context_anomaly(self, ctx):
@@ -324,10 +320,10 @@ class Ts2Vec(torch.nn.Module):
         return (e_actv, e_ap, e_an)
 
 
-class GRU2Vec(Ts2Vec):
+class STC(AnchorTs2Vec):
     def __init__(self):
-        super(GRU2Vec, self).__init__() 
-        self.rnn = nn.GRU(input_size=11, hidden_size=64, num_layers=1, batch_first=True)
+        super(STC, self).__init__() 
+        self.rnn = nn.GRU(input_size=36, hidden_size=80, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(64, 32),
             nn.ReLU(),

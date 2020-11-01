@@ -22,7 +22,7 @@ import torch
 
 
 # Reproducibility .... #
-SEED = 117697 
+SEED = 11769
 random.seed(SEED)
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -32,6 +32,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WINDOW_OVERLAPPING = .75
 PATIENCE = 750
 FLEVEL = "MAGIK"
+
+LOSS = cb.Contextual_Coherency
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -176,9 +178,9 @@ def ts2vec_cicids2017(train, test, outpath):
     dist_plot = cb.DistPlot(outpath)
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     net = NeuralNet(
-        cb.GRU2Vec, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
+        cb.STC, LOSS, optimizer=torch.optim.Adam, 
         iterator_train__shuffle=True,
-        lr=5e-5, batch_size=4090, max_epochs=4000,
+        lr=5e-4, batch_size=512, max_epochs=1,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             dist_plot, loss_plot,
@@ -209,7 +211,7 @@ def grid_search(train, valid, grid_params, outpath):
     dist_plot = cb.DistPlot(outpath)
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     net = NeuralNet(
-        cb.GRU2Vec, cb.Contextual_Coherency, 
+        cb.STC, LOSS, 
         optimizer=torch.optim.Adam, device=DEVICE,
         iterator_train__shuffle=True,
         verbose=1, train_split=None,
