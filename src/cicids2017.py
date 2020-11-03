@@ -178,18 +178,19 @@ def history2dframe(net, labels=None):
 def ts2vec_cicids2017(train, test, outpath):
     dist_plot = cb.DistPlot(outpath)
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
+    rec_prec_plot = cb.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
     net = NeuralNet(
         cb.STC, LOSS, optimizer=torch.optim.Adam, 
         iterator_train__shuffle=True,
         lr=1e-4, batch_size=6090, max_epochs=4000,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
-            dist_plot, loss_plot,
-            cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.recall_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.precision_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score(),
-            # EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+            # *cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
+            cb.Ts2VecScore(skmetrics.recall_score).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.precision_score).epoch_score(on_train=False),
+            # *cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score(),
+            dist_plot, loss_plot, rec_prec_plot,
+            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
 
     # Retrain on whole dataset ..... #
@@ -297,8 +298,12 @@ def prepare_dataset(df, outpath):
     labeled_samples = { k: np.concatenate(v) for k, v in labeled_samples.items() }
     labeled_train, labeled_test = trainsplit(labeled_samples, .33)
 
-    # tidxs = np.where(labeled_train["attack"]==False)[0]
-    # labeled_train = { k: x[tidxs] for k, x in labeled_train.items() }
+    week_normal_traffic = np.where(labeled_train["attack"]==False)[0]
+    week_attack_traffic = np.where(labeled_train["attack"]==True)[0]
+    labeled_train_attacks = { k: x[week_attack_traffic] for k, x in labeled_train.items() }
+    labeled_train = { k: x[week_normal_traffic] for k, x in labeled_train.items() }
+    for k, v in labeled_train_attacks.items():
+        labeled_test[k] = np.concatenate([labeled_test[k], v])
 
     return monday, labeled_train, labeled_test 
 
@@ -357,5 +362,5 @@ if __name__ == "__main__":
         })
         grid_search(monday, labeled_train, grid_params, args.outpath)
     else:
-        ts2vec, res = ts2vec_cicids2017(monday, labeled_test, args.outpath)
+        ts2vec, res = ts2vec_cicids2017(labeled_train, labeled_test, args.outpath)
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")

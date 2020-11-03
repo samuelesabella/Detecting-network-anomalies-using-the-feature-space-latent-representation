@@ -4,7 +4,7 @@ from skorch.callbacks import EpochScoring
 from sklearn import preprocessing
 from tqdm import tqdm
 import sys
-from umap import UMAP
+# from umap import UMAP
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import more_itertools as mit
@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -220,10 +220,19 @@ class Ts2VecScore():
     def __name__(self):
         return f"{self.measure.__name__}"
 
-    def epoch_score(self):
-        es_vl = EpochScoring(self, on_train=False, lower_is_better=False, 
-                             name=f"valid_{self.__name__}")
-        return es_vl
+    def epoch_score(self, on_train=None):
+        if on_train is not None:
+            tv = "train" if on_train else "valid"
+            score_name = f"{tv}_{self.__name__}"
+            es_vl = EpochScoring(self, on_train=on_train, lower_is_better=False, 
+                                 name=score_name)
+            return es_vl
+
+        tr_score = EpochScoring(self, on_train=True, lower_is_better=False, 
+                                 name=f"train_{self.__name__}")
+        vl_score = EpochScoring(self, on_train=False, lower_is_better=False, 
+                                 name=f"valid_{self.__name__}")
+        return (tr_score, vl_score)
 
     def __call__(self, net, dset=None, y=None):
         with torch.no_grad():
