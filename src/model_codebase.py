@@ -4,7 +4,7 @@ from skorch.callbacks import EpochScoring
 from sklearn import preprocessing
 from tqdm import tqdm
 import sys
-# from umap import UMAP
+from umap import UMAP
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import more_itertools as mit
@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -140,7 +140,7 @@ def find_neg_anchors(e_actv, e_ap, start_time, end_time, host, device_category):
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
     # Getting the minimum
-    idxs = fast_filter(fmatrix, device_category) 
+    idxs = fast_filter(fmatrix, host) 
     dn = e_actv[idxs]
     
     return dn
@@ -324,11 +324,11 @@ class AnchorTs2Vec(torch.nn.Module):
 class STC(AnchorTs2Vec):
     def __init__(self):
         super(STC, self).__init__() 
-        self.rnn = nn.GRU(input_size=11, hidden_size=32, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(input_size=36, hidden_size=64, num_layers=2, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(32, 32),
+            nn.Linear(64, 128),
             nn.ReLU(),
-            nn.Linear(32, 16),
+            nn.Linear(128, 128),
             nn.ReLU())
 
     def toembedding(self, x):

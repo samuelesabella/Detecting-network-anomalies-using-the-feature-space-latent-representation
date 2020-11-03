@@ -1,4 +1,5 @@
 from collections import defaultdict
+import math
 from sklearn.model_selection import train_test_split
 from pathlib import Path
 from sklearn.model_selection import KFold
@@ -29,9 +30,9 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .75
+WINDOW_OVERLAPPING = .85
 PATIENCE = 750
-FLEVEL = "MAGIK"
+FLEVEL = "NF_BLMISC"
 
 LOSS = cb.Contextual_Coherency
 
@@ -254,6 +255,20 @@ def split2dataset(split):
 
     return Dataset(X, y)
     
+def trainsplit(dd, ts_perc):
+    ddkeys = list(dd.keys())
+    n = len(dd[ddkeys[0]])
+    idxs = np.random.permutation(range(n))
+    tr_size = math.floor(n * (1-ts_perc))
+    tr_idxs = idxs[:tr_size]
+    ts_idxs = idxs[tr_size:]
+    tr, ts = {}, {}
+
+    for k in ddkeys:
+        tr[k] = dd[k][tr_idxs]
+        ts[k] = dd[k][ts_idxs]
+    return tr, ts
+
 
 def prepare_dataset(df, outpath):
     pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
@@ -262,7 +277,7 @@ def prepare_dataset(df, outpath):
     df_monday = df[df.index.get_level_values("_time").day == 3]
     df_monday = pr.preprocessing(df_monday, update=False)
     monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
-    monday = Dataset(*cb.dataset2tensors(monday))
+    # monday = Dataset(*cb.dataset2tensors(monday))
 
     # Storing features metainfo ..... #
     with open(outpath / "features.txt", "w+") as f:
@@ -280,18 +295,15 @@ def prepare_dataset(df, outpath):
         for k, v in day_samples.items():
             labeled_samples[k].append(v)
     labeled_samples = { k: np.concatenate(v) for k, v in labeled_samples.items() }
-    labeled_samples = Dataset(*cb.dataset2tensors(labeled_samples))
+    labeled_train, labeled_test = trainsplit(labeled_samples, .33)
 
-    # Stratified sampling for each attack ..... #
-    labeled_train, labeled_test = train_test_split(labeled_samples, test_size=0.33, 
-                                                   random_state=SEED, stratify=labeled_samples.y.cpu())
-    labeled_train = split2dataset(labeled_train)
-    labeled_test = split2dataset(labeled_test)
+    # tidxs = np.where(labeled_train["attack"]==False)[0]
+    # labeled_train = { k: x[tidxs] for k, x in labeled_train.items() }
 
     return monday, labeled_train, labeled_test 
 
 
-def store_dataset(monday, labeled_train, ts, path):
+def store_dataset(monday, labeled_train, labeled_test, path):
     path.mkdir(parents=True, exist_ok=True)
     cPickle.dump(monday, gzip.open(path / "monday.pkl", "wb"))
     cPickle.dump(labeled_train, gzip.open(path / "labeled_mondayain.pkl", "wb"))
@@ -331,6 +343,9 @@ if __name__ == "__main__":
         monday, labeled_train, labeled_test = prepare_dataset(df, args.outpath)
         store_dataset(monday, labeled_train, labeled_test, dataset_cache) 
 
+    monday = Dataset(*cb.dataset2tensors(monday))
+    labeled_train = Dataset(*cb.dataset2tensors(labeled_train))
+    labeled_test = Dataset(*cb.dataset2tensors(labeled_test))
     Dataset2GPU(monday); 
     Dataset2GPU(labeled_train); Dataset2GPU(labeled_test)
 
