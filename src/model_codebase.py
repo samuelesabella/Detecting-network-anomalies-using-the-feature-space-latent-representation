@@ -72,6 +72,8 @@ def ts_windowing(df, overlapping=.95):
             actv2_no_attack = (context[ACTIVITY_LEN:]["attack"]=="none").any()
             is_anomaly = (actv1_no_attack and actv2_attack) or (actv1_attack and actv2_no_attack)
             samples["attack"].append(is_anomaly) # Ps: anomaly no attack
+            which_attack = np.unique(context["attack"]!="none")[0]
+            samples["which_attack"].append(which_attack) # Ps: anomaly no attack
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
 
@@ -82,6 +84,7 @@ def dataset2tensors(dataset):
     dataset["device_category"] = preprocessing.LabelEncoder().fit_transform(dataset["device_category"])
     Y = torch.Tensor(dataset["attack"])
     del dataset["attack"]
+    del dataset["which_attack"]
 
     return dataset, Y
 
