@@ -73,9 +73,10 @@ def ts_windowing(df, overlapping=.95):
             isanomaly = NORMAL_TRAFFIC if (context["isanomaly"]=="none").all() else ATTACK_TRAFFIC
             samples["isanomaly"].append(isanomaly)
 
+            attack_type = "none"
             if isanomaly == ATTACK_TRAFFIC:
                 attack_type = np.unique(context["isanomaly"][context["isanomaly"]!="none"])[0]
-            samples["attack_type"].append("none")
+            samples["attack_type"].append(attack_type)
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
 
