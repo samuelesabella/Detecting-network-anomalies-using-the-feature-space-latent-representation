@@ -298,12 +298,12 @@ def prepare_dataset(df, outpath):
     labeled_samples = { k: np.concatenate(v) for k, v in labeled_samples.items() }
     labeled_train, labeled_test = trainsplit(labeled_samples, .33)
 
-    week_normal_traffic = np.where(labeled_train["isanomaly"]==False)[0]
-    week_attack_traffic = np.where(labeled_train["isanomaly"]==True)[0]
-    labeled_train_attacks = { k: x[week_attack_traffic] for k, x in labeled_train.items() }
-    labeled_train = { k: x[week_normal_traffic] for k, x in labeled_train.items() }
-    for k, v in labeled_train_attacks.items():
-        labeled_test[k] = np.concatenate([labeled_test[k], v])
+    # week_normal_traffic = np.where(labeled_train["isanomaly"]==False)[0]
+    # week_attack_traffic = np.where(labeled_train["isanomaly"]==True)[0]
+    # labeled_train_attacks = { k: x[week_attack_traffic] for k, x in labeled_train.items() }
+    # labeled_train = { k: x[week_normal_traffic] for k, x in labeled_train.items() }
+    # for k, v in labeled_train_attacks.items():
+    #     labeled_test[k] = np.concatenate([labeled_test[k], v])
 
     return monday, labeled_train, labeled_test 
 
