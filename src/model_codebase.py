@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -71,11 +71,11 @@ def ts_windowing(df, overlapping=.95):
             # actv2_no_attack = (context[ACTIVITY_LEN:]["isanomaly"]=="none").any()
             # is_anomaly = (actv1_no_attack and actv2_attack) or (actv1_attack and actv2_no_attack)
             isanomaly = NORMAL_TRAFFIC if (context["isanomaly"]=="none").all() else ATTACK_TRAFFIC
-            samples["isanomaly"].append(isanomaly) # Ps: anomaly no attack
+            samples["isanomaly"].append(isanomaly)
 
-            if isanomaly != ATTACK_TRAFFIC:
-                which_attack = np.unique(context["isanomaly"]!="none")[0]
-            samples["attack_type"].append(which_attack) # Ps: anomaly no attack
+            if isanomaly == ATTACK_TRAFFIC:
+                attack_type = np.unique(context["isanomaly"][context["isanomaly"]!="none"])[0]
+            samples["attack_type"].append("none")
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
 
