@@ -31,7 +31,7 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WINDOW_OVERLAPPING = .85
-PATIENCE = 750
+PATIENCE = 75
 FLEVEL = "NF_BLMISC"
 
 LOSS = cb.Contextual_Coherency
@@ -100,7 +100,7 @@ class Cicids2017Preprocessor(generator.Preprocessor):
         def to_dt(x):
             return pd.to_datetime(x, format='%Y-%m-%dT%H:%M:%S.%f')
         
-        df["attack"] = "none"
+        df["isanomaly"] = "none"
         host_idxs = df.index.get_level_values("host")
         times_idxs = df.index.get_level_values("_time")
         
@@ -112,7 +112,7 @@ class Cicids2017Preprocessor(generator.Preprocessor):
             else:
                 host_selector = (host_idxs==host)
             time_selector = (times_idxs > dt_start) & (times_idxs < dt_stop)
-            df.loc[host_selector & time_selector, "attack"] = f"{atype}__{adetail}"
+            df.loc[host_selector & time_selector, "isanomaly"] = f"{atype}__{adetail}"
         return df
     
     def preprocessing(self, df, **kwargs):
@@ -298,8 +298,8 @@ def prepare_dataset(df, outpath):
     labeled_samples = { k: np.concatenate(v) for k, v in labeled_samples.items() }
     labeled_train, labeled_test = trainsplit(labeled_samples, .33)
 
-    week_normal_traffic = np.where(labeled_train["attack"]==False)[0]
-    week_attack_traffic = np.where(labeled_train["attack"]==True)[0]
+    week_normal_traffic = np.where(labeled_train["isanomaly"]==False)[0]
+    week_attack_traffic = np.where(labeled_train["isanomaly"]==True)[0]
     labeled_train_attacks = { k: x[week_attack_traffic] for k, x in labeled_train.items() }
     labeled_train = { k: x[week_normal_traffic] for k, x in labeled_train.items() }
     for k, v in labeled_train_attacks.items():
@@ -348,6 +348,7 @@ if __name__ == "__main__":
         monday, labeled_train, labeled_test = prepare_dataset(df, args.outpath)
         store_dataset(monday, labeled_train, labeled_test, dataset_cache) 
 
+    print(list(labeled_train.keys()))
     monday = Dataset(*cb.dataset2tensors(monday))
     labeled_train = Dataset(*cb.dataset2tensors(labeled_train))
     labeled_test = Dataset(*cb.dataset2tensors(labeled_test))
@@ -362,5 +363,5 @@ if __name__ == "__main__":
         })
         grid_search(monday, labeled_train, grid_params, args.outpath)
     else:
-        ts2vec, res = ts2vec_cicids2017(labeled_train, labeled_test, args.outpath)
+        ts2vec, res = ts2vec_cicids2017(monday, labeled_train, args.outpath)
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")

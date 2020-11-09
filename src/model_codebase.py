@@ -57,23 +57,25 @@ def ts_windowing(df, overlapping=.95):
         # Building context/activity windows ..... #
         windows = dfwindowed(ts, CONTEXT_LEN, window_stepsize)
         for context in windows:
-            ctxvalues = context.drop(columns=["_time", "host", "device_category", "attack"]).values
+            ctxvalues = context.drop(columns=["_time", "host", "device_category", "isanomaly"]).values
             samples["context"].append(ctxvalues)
             samples["host"].append(host)
             samples["device_category"].append(device_category)
             samples["start_time"].append(context["_time"].min().timestamp())
             samples["end_time"].append(context["_time"].max().timestamp())
 
-            # activity_attack = NORMAL_TRAFFIC if (context["attack"]=="none").all() else ATTACK_TRAFFIC
-            actv1_no_attack = (context[:ACTIVITY_LEN]["attack"]=="none").any()
-            actv2_attack = (context[ACTIVITY_LEN:]["attack"]!="none").any()
+            # actv1_no_attack = (context[:ACTIVITY_LEN]["isanomaly"]=="none").any()
+            # actv2_attack = (context[ACTIVITY_LEN:]["isanomaly"]!="none").any()
 
-            actv1_attack = (context[:ACTIVITY_LEN]["attack"]!="none").any()
-            actv2_no_attack = (context[ACTIVITY_LEN:]["attack"]=="none").any()
-            is_anomaly = (actv1_no_attack and actv2_attack) or (actv1_attack and actv2_no_attack)
-            samples["attack"].append(is_anomaly) # Ps: anomaly no attack
-            which_attack = np.unique(context["attack"]!="none")[0]
-            samples["which_attack"].append(which_attack) # Ps: anomaly no attack
+            # actv1_attack = (context[:ACTIVITY_LEN]["isanomaly"]!="none").any()
+            # actv2_no_attack = (context[ACTIVITY_LEN:]["isanomaly"]=="none").any()
+            # is_anomaly = (actv1_no_attack and actv2_attack) or (actv1_attack and actv2_no_attack)
+            isanomaly = NORMAL_TRAFFIC if (context["isanomaly"]=="none").all() else ATTACK_TRAFFIC
+            samples["isanomaly"].append(isanomaly) # Ps: anomaly no attack
+
+            if isanomaly != ATTACK_TRAFFIC:
+                which_attack = np.unique(context["isanomaly"]!="none")[0]
+            samples["attack_type"].append(which_attack) # Ps: anomaly no attack
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
 
@@ -82,9 +84,9 @@ def dataset2tensors(dataset):
     # Host to id
     dataset["host"] = preprocessing.LabelEncoder().fit_transform(dataset["host"])
     dataset["device_category"] = preprocessing.LabelEncoder().fit_transform(dataset["device_category"])
-    Y = torch.Tensor(dataset["attack"])
-    del dataset["attack"]
-    del dataset["which_attack"]
+    Y = torch.Tensor(dataset["isanomaly"])
+    del dataset["isanomaly"]
+    del dataset["attack_type"]
 
     return dataset, Y
 
@@ -247,7 +249,7 @@ class Ts2VecScore():
 # ----- ----- 2D DIMENSIONALITY REDUCTION ----- ----- #
 # ----- ----- --------------------------- ----- ----- #
 def df2tensor(df):
-    metacols = ["device_category", "host", "_time", "attack"]
+    metacols = ["device_category", "host", "_time", "isanomaly"]
     df_metacols = [c for c in df if c in metacols]
 
     metainfo = df[df_metacols].groupby(level="sample_idx")
