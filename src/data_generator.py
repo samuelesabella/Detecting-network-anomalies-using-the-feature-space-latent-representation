@@ -271,6 +271,7 @@ if __name__ == "__main__":
             time.sleep(60 * args.every)
         except KeyboardInterrupt:
             print("Closing capture")
+            generator.pull()
             df = generator.to_pandas()
             df.to_pickle(f"{args.output}.pkl")
             break

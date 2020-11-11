@@ -16,7 +16,6 @@ eval $(ssh-agent) && \
 ssh-add /app/keys/github_key && \
 ssh-keyscan -H github.com >> /etc/ssh/ssh_known_hosts && \
 cd /app/tesi_sabella && git pull && cd -
-pip3 install -r /app/tesi_sabella/lab.requirements.txt 1>/dev/null
 
 # Starting dummy interface ..... #
 ip link add fake_nic type dummy && \
