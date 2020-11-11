@@ -1,3 +1,4 @@
 sklearn 
+influxdb_client
 pandas
 pyfluxc
