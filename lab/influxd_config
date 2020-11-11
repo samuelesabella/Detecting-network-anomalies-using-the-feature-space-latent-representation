@@ -19,7 +19,7 @@
 
 [http]
   enabled = true # enabler or not HTTP API - Note CLI connects to the database using HTTP API
-  https-enabled = false # enable or not HTTPS
+  https-enabled = true # enable or not HTTPS
   flux-enabled = true
 
 [subscriber]

@@ -12,8 +12,8 @@ RUN apt-get clean all && apt-get update && apt-get install -y ntopng
 
 RUN apt-get install -y redis-server 
 
-RUN wget https://dl.influxdata.com/influxdb/releases/influxdb_1.5.5_amd64.deb
-RUN dpkg -i influxdb_1.5.5_amd64.deb 
+RUN wget https://dl.influxdata.com/influxdb/releases/influxdb_1.8.3_amd64.deb
+RUN dpkg -i influxdb_1.8.3_amd64.deb 
 
 RUN apt-get install -y tcpreplay iproute2
 
@@ -36,5 +36,4 @@ RUN pip3 install -r /app/tesi_sabella/lab.requirements.txt
 COPY ./pcaps /app/pcaps/
 COPY ./container_init.sh /app/container_init.sh
 
-# ENTRYPOINT ["/bin/bash"]
 ENTRYPOINT ["/bin/bash", "/app/container_init.sh"]

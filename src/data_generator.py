@@ -133,16 +133,28 @@ class FluxDataGenerator():
 
         client = InfluxDBClient(url="http://localhost:8086", token="my-token", org="my-org")
         query_api = client.query_api()
-        new_samples = query_api.query_data_frame(str(q)).drop(columns=["result", "table"])
-        
-        if new_samples is None:
+        try:
+            query_reply = query_api.query_data_frame(str(q))
+        except influxdb_client.rest.ApiException as e:
+            if e != b'{"error":"failed to initialize execute state: no database"}\n':
+                logging.warning(e)
             self.last_timestamp = utcnow if stop is None else stop
             return self.last_timestamp, None 
+        except Exception as e: 
+            logging.warning("Exception: probably database not ready")
+            return self.last_timestamp, None
+        new_samples = pd.concat(query_reply) if type(query_reply)==list else query_reply
+        
+        if new_samples.empty:
+            self.last_timestamp = utcnow if stop is None else stop
+            return self.last_timestamp, None 
+        new_samples = new_samples.drop(columns=["result", "table"])
 
         # Transforming existing ndpi flows to measurements ..... #
-        host_ndpi_flows = new_samples.loc[new_samples["_measurement"]=="host:ndpi_flows"]
+        host_ndpi_measurements = new_samples["_measurement"]=="host:ndpi_flows"
+        host_ndpi_flows = new_samples.loc[host_ndpi_measurements]
         host_ndpi_flows_cat = host_ndpi_flows["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
-        new_samples.loc[host_ndpi_flows.index, "_field"] += ("__" + host_ndpi_flows_cat)
+        new_samples.loc[host_ndpi_measurements, "_field"] += ("__" + host_ndpi_flows_cat)
         # Transforming existing ndpi bytes to measurements ..... #
         host_ndpi_bytes = new_samples.loc[new_samples["_measurement"]=="host:ndpi"]
         host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
@@ -206,19 +218,20 @@ class FluxDataGenerator():
         return q
 
     def category_map(self, new_samples):
-        unique_hosts = new_samples.unique()
-        unique_unknonw = [x for x in unique_hosts if x not in self.host_map]
+        return pd.Series(["unknown"]*len(new_samples))
+        # unique_hosts = new_samples["host"].unique()
+        # unique_unknonw = [x for x in unique_hosts if x not in self.host_map]
 
-        ntopng_host, ntopng_port = self.conf["ntopng"] 
-        ntopng_user, ntopng_passwd = self.conf["ntopng_credentials"]
-        url = f"https://{ntopng_host}:{ntopng_port}/lua/rest/get/host/data.lua?host="
-        params = { "cookie": f"user={ntopng_user}; password={ntopng_passwd}" } 
-        for h in unique_unknonw:
-            r = requests.get(url = url + h, params = params) 
-            # TODO: extract class
-            raise NotImplementedError("TODO")
-            data = r.json()
-        return new_samples["host"].map(self.host_map)
+        # ntopng_host, ntopng_port = self.conf["ntopng"] 
+        # ntopng_user, ntopng_passwd = self.conf["ntopng_credentials"]
+        # url = f"https://{ntopng_host}:{ntopng_port}/lua/rest/get/host/data.lua?host="
+        # params = { "cookie": f"user={ntopng_user}; password={ntopng_passwd}" } 
+        # for h in unique_unknonw:
+        #     r = requests.get(url = url + h, params = params) 
+        #     # TODO: extract class
+        #     raise NotImplementedError("TODO")
+        #     data = r.json()
+        # return new_samples["host"].map(self.host_map)
 
 
 # ----- ----- CLI ----- ----- #
