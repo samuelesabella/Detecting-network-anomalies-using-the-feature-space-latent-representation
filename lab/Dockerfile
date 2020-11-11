@@ -36,4 +36,5 @@ RUN pip3 install -r /app/tesi_sabella/lab.requirements.txt
 COPY ./pcaps /app/pcaps/
 COPY ./container_init.sh /app/container_init.sh
 
+# ENTRYPOINT ["/bin/bash"]
 ENTRYPOINT ["/bin/bash", "/app/container_init.sh"]
