@@ -32,14 +32,14 @@ for absfname in /app/pcaps/*.pcap; do
     fname=`basename "$absfname" .pcap`
     echo "> Replaying $fname"
 
-    # python3.7 /app/tesi_sabella/src/data_generator.py -b ntopng --credentials=admin:admin -o /app/ext/$fname &
-    # data_gen_pid=$!
+    python3.7 /app/tesi_sabella/src/data_generator.py -b ntopng --credentials=admin:admin -o /app/ext/$fname -e 2 &
+    data_gen_pid=$!
 
     start=`date --utc +"%Y-%m-%dT%H:%M:%S.%N"`
     tcpreplay -i fake_nic "$absfname"
     echo " \"$fname\": \"$start\", " >> $TIMESHIFT_FILE
 
-    # kill -INT data_gen_pid
+    kill -INT data_gen_pid
     influxd backup -portable -database ntopng "/app/ext/${fname}.backup"
 done
 

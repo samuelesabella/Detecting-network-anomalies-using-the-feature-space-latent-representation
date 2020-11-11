@@ -25,8 +25,8 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
-CONTEXT_LEN = 112 # context window length, 14 minutes with 4spm (sample per minutes) 
-ACTIVITY_LEN = 56 # activity window length, 7 minutes 
+CONTEXT_LEN = 112 # context window length, 28 minutes with 4spm (sample per minutes) 
+ACTIVITY_LEN = 56 # activity window length, 14 minutes 
 
 # Triplet margins
 BETA_1 = .2
@@ -146,7 +146,7 @@ def find_neg_anchors(e_actv, e_ap, start_time, end_time, host, device_category):
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
     # Getting the minimum
-    idxs = fast_filter(fmatrix, host) 
+    idxs = fast_filter(fmatrix, device_category) 
     dn = e_actv[idxs]
     
     return dn

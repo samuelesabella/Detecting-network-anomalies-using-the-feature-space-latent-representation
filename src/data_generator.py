@@ -1,4 +1,6 @@
 from collections import defaultdict
+import influxdb_client
+from influxdb_client import InfluxDBClient
 from datetime import datetime
 from sklearn.preprocessing import KBinsDiscretizer
 import argparse
@@ -128,7 +130,11 @@ class FluxDataGenerator():
             start = self.last_timestamp
         utcnow = pd.Timestamp.utcnow()
         q = self.query(start, stop)
-        new_samples = self.fluxclient(q, grouby=False).dframe
+
+        client = InfluxDBClient(url="http://localhost:8086", token="my-token", org="my-org")
+        query_api = client.query_api()
+        new_samples = query_api.query_data_frame(str(q)).drop(columns=["result", "table"])
+        
         if new_samples is None:
             self.last_timestamp = utcnow if stop is None else stop
             return self.last_timestamp, None 
@@ -224,7 +230,7 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--bucket", help="ntopng flux-bucket name", default="ntopng")
     parser.add_argument("--influxport", help="influxdb port", type=int, default=8086)
     parser.add_argument("--ntopngport", help="ntopng port", type=int, default=3000)
-    parser.add_argument("--credentials", help="ntopng REST API credential 'user:password'", type=str)
+    parser.add_argument("--credentials", help="ntopng REST API credential 'user:password'", type=str, default="admin:admin")
     parser.add_argument("-e", "--every", help="sample data every X minutes", type=int, default=15)
     parser.add_argument("-o", "--output", help="output dataframe filename")
     args = parser.parse_args()
