@@ -18,8 +18,10 @@
   max-select-buckets = 0
 
 [http]
-  enabled = true # enabler or not HTTP API - Note CLI connects to the database using HTTP API
-  https-enabled = true # enable or not HTTPS
+  enabled = true 
+  https-enabled = true 
+  https-certificate = "/etc/ssl/influxdb-selfsigned.crt"
+  https-private-key = "/etc/ssl/influxdb-selfsigned.key"
   flux-enabled = true
 
 [subscriber]

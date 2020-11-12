@@ -10,12 +10,12 @@ TIMESHIFT_FILE="/app/ext/timeshift.txt"
 LOCALNET="192.168.10.0/24,205.174.165.0/24"
 
 redis-server 1>/dev/null &
-influxd -config /app/tesi_sabella/lab/influxd_config 1>/dev/null 2>/dev/null &
+influxd -config /app/tesi_sabella/lab/influxd_config & # 1>/dev/null 2>/dev/null &
 
 eval $(ssh-agent) && \
 ssh-add /app/keys/github_key && \
 ssh-keyscan -H github.com >> /etc/ssh/ssh_known_hosts && \
-cd /app/tesi_sabella && git pull && cd -
+# cd /app/tesi_sabella && git checkout . && git pull && cd -
 
 # Starting dummy interface ..... #
 ip link add fake_nic type dummy && \
