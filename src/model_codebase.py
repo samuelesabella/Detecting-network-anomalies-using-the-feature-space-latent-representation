@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -245,65 +245,6 @@ class Ts2VecScore():
             y_hat = net.module_.context_anomaly(dset.X["context"])
         res = self.measure(y, np.round(y_hat.cpu()))
         return res
-
-
-# ----- ----- 2D DIMENSIONALITY REDUCTION ----- ----- #
-# ----- ----- --------------------------- ----- ----- #
-def df2tensor(df):
-    metacols = ["device_category", "host", "_time", "isanomaly"]
-    df_metacols = [c for c in df if c in metacols]
-
-    metainfo = df[df_metacols].groupby(level="sample_idx")
-    metainfo = metainfo.apply(series_mean_time)
-
-    df_values = df.drop(columns=df_metacols)
-    v = df_values.groupby(level="sample_idx").apply(lambda x: x.values)
-    v = torch.Tensor(v).detach()
-
-    return metainfo, v
-
-def series_mean_time(s):
-    min_max_t = pd.Series([s["_time"].min(), s["_time"].max()], index=["start", "stop"])
-    s["_time"] = min_max_t[1] - pd.Series(min_max_t).diff().divide(2).iloc[1]
-    return s.iloc[0]
-
-
-def reduce_and_combine(meta_info, ebs):
-    host2D = UMAP().fit_transform(ebs)
-    # host2D = TSNE(n_components=2).fit_transform(ebs)
-    host2Ddf = pd.DataFrame(host2D, columns=["x1", "x2"])
-    return pd.concat([meta_info, host2Ddf], axis=1, sort=False) 
-
-def ts_embedding(ts, overlapping):
-    stepsize = max(int(ACTIVITY_LEN * (1 - overlapping)), 1) 
-    windows = list(dfwindowed(ts, ACTIVITY_LEN, step=stepsize))
-    indexs = range(len(windows))
-    samples = pd.concat(windows, keys=indexs, names=["sample_idx"])
-    samples = samples.reset_index(level=1).drop("level_1", axis=1)
-
-    metainfo, samples_tns = df2tensor(samples)
-    
-    return metainfo, samples_tns
-
-
-def network2D(ts2vec, netdf, overlapping=0.):
-    multihost = isinstance(netdf.index, pd.MultiIndex)
-    
-    if not multihost:
-        meta, tns = ts_embedding(netdf, overlapping)
-        tns_emb = ts2vec.toembedding(tns).detach()
-        return reduce_and_combine(meta, tns_emb)
-
-    netinfo = defaultdict(list)
-    for (_, host), ts in netdf.groupby(level=["device_category", "host"]):
-        meta, tns = ts_embedding(ts, overlapping) 
-        tns_emb = ts2vec.toembedding(tns).detach()
-        netinfo["meta_info"].append(meta)
-        netinfo["embedding"].extend(tns_emb)
-    
-    meta = pd.concat(netinfo["meta_info"]).reset_index()
-    embeddings = np.stack(netinfo["embedding"])
-    return reduce_and_combine(meta, embeddings)
 
 
 # ----- ----- MODELS ----- ----- #

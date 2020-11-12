@@ -301,7 +301,7 @@ BASIC_LEVEL_LOW = set({
 SIX_IS_THE_MAGIK_NUM = set({
     "active_flows:flows_as_client", "active_flows:flows_as_server",
     "unreachable_flows:flows_as_client", "unreachable_flows:flows_as_server",
-    "alerted_flows:flows_as_client", "alerted_flows:flows_as_server",
+    "misbehaving_flows:flows_as_client", "misbehaving_flows:flows_as_server",
 })
 
 BASIC_LEVEL_HIGH = set({
