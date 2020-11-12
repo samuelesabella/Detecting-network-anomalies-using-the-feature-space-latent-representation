@@ -339,16 +339,16 @@ class AnchorTs2Vec(torch.nn.Module):
 class STC(AnchorTs2Vec):
     def __init__(self):
         super(STC, self).__init__() 
-        self.rnn = nn.GRU(input_size=36, hidden_size=64, num_layers=2, batch_first=True)
+        self.rnn = nn.GRU(input_size=11, hidden_size=32, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(64, 128),
+            nn.Linear(32, 64),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(64, 64),
             nn.ReLU())
 
     def toembedding(self, x):
         rnn_out, _ = self.rnn(x)
         e = self.embedder(rnn_out[:, -1])
-        e = F.normalize(e, p=2, dim=1)
+        # e = F.normalize(e, p=2, dim=1)
         return e
 
