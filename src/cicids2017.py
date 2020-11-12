@@ -190,8 +190,7 @@ def ts2vec_cicids2017(train, test, outpath):
             cb.Ts2VecScore(skmetrics.precision_score).epoch_score(on_train=False),
             cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score(on_train=False),
             dist_plot, loss_plot, rec_prec_plot,
-            EarlyStopping("valid_roc_auc_score", lower_is_better=True, patience=PATIENCE)
-            # EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
 
     # Retrain on whole dataset ..... #
@@ -299,6 +298,7 @@ def prepare_dataset(df, outpath):
             target_server_dset[k].append(v)
     training = { k: np.concatenate(v) for k, v in net_dset.items() }
     validation = { k: np.concatenate(v) for k, v in target_server_dset.items() }
+    validation = { k: np.concatenate([v, monday[k]]) for k, v in validation.items() }
 
     # Removing attacks from training data ..... #
     normal_training_mask = np.where(training["isanomaly"] == False)[0]
