@@ -287,7 +287,7 @@ def prepare_dataset(df, outpath):
         day_traffic = df[df.index.get_level_values("_time").day == d]
         day_traffic_preproc = pr.preprocessing(day_traffic, update=False)
 
-        net_mask = day_traffic_preproc.index.get_level_values("host") == "192.168.10.50"
+        net_mask = day_traffic_preproc.index.get_level_values("host") != "192.168.10.50"
         target_mask = np.invert(net_mask)
 
         net_windows = cb.ts_windowing(day_traffic_preproc[net_mask], overlapping=WINDOW_OVERLAPPING)
