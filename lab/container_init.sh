@@ -4,6 +4,8 @@ HELLO="
 | environment ready, now configuring |
 | then replaying packets...          |
 ----- ----- ------------- ----- -----"
+POLLEVERY=2
+
 echo "$HELLO"
 
 TIMESHIFT_FILE="/app/ext/timeshift.txt"
@@ -42,8 +44,9 @@ for absfname in /app/pcaps/*.pcap; do
     fname=`basename "$absfname" .pcap`
     echo "> Replaying \"$fname\""
 
-    python3.7 /app/tesi_sabella/src/data_generator.py -b ntopng --credentials=admin:admin -o /app/ext/$fname -e 2 &
+    python3.7 /app/tesi_sabella/src/data_generator.py -b ntopng --credentials=admin:admin -o /app/ext/$fname -e $POLLEVERY &
     data_gen_pid=$!
+    echo "Poller: $data_gen_pid"
 
     start=`date --utc +"%Y-%m-%dT%H:%M:%S.%N"`
     echo "tcpreplay -i fake_nic \"$absfname\""
@@ -51,6 +54,7 @@ for absfname in /app/pcaps/*.pcap; do
     echo " \"$fname\": \"$start\", " >> $TIMESHIFT_FILE
 
     kill -INT $data_gen_pid
+    sleep $(( ($POLLEVERY * 60) + 1 ))
     influxd backup -portable -database ntopng "/app/ext/${fname}.backup"
 done
 
