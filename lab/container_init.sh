@@ -50,7 +50,7 @@ for absfname in /app/pcaps/*.pcap; do
     tcpreplay -i fake_nic "$absfname"
     echo " \"$fname\": \"$start\", " >> $TIMESHIFT_FILE
 
-    kill -INT data_gen_pid
+    kill -INT $data_gen_pid
     influxd backup -portable -database ntopng "/app/ext/${fname}.backup"
 done
 
