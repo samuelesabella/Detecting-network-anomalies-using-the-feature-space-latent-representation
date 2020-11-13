@@ -1,4 +1,5 @@
 from collections import defaultdict
+import signal
 import influxdb_client
 from influxdb_client import InfluxDBClient
 from datetime import datetime
@@ -235,6 +236,16 @@ class FluxDataGenerator():
         # return new_samples["host"].map(self.host_map)
 
 
+class SigCatcher:
+    def __init__(self, signals):
+        self.received = None
+        for s in signals:
+            signal.signal(signal.SIGINT, self.catcher)
+
+    def catcher(self, signum, frame):
+        self.received = signum
+
+
 # ----- ----- CLI ----- ----- #
 # ----- ----- --- ----- ----- #
 if __name__ == "__main__":
@@ -265,14 +276,12 @@ if __name__ == "__main__":
     start = pd.Timestamp.utcnow() - pd.DateOffset(minutes=args.every)
     generator = FluxDataGenerator(args.bucket, "15s", fclient, start, ntopng_conf)
 
-    while True:
-        try:
-            generator.pull()
-            print(f"Polled at: {datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}")
-            time.sleep(60 * args.every)
-        except KeyboardInterrupt:
-            print("Closing capture")
-            generator.pull()
-            df = generator.to_pandas()
-            df.to_pickle(f"{args.output}.pkl")
-            break
+    sigcatch = SigCatcher([signal.SIGINT, signal.SIGTERM])
+    while sigcatch.received is None:
+        generator.pull()
+        print(f"Polled at: {datetime.now().strftime('%m.%d.%Y_%H.%M.%S')}")
+        time.sleep(60 * args.every)
+    print("Closing capture")
+    generator.pull()
+    df = generator.to_pandas()
+    df.to_pickle(f"{args.output}.pkl")
