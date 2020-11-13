@@ -151,17 +151,15 @@ class FluxDataGenerator():
         new_samples = new_samples.drop(columns=["result", "table"])
 
         # Transforming existing ndpi flows to measurements ..... #
-        host_ndpi_measurements = new_samples["_measurement"]=="host:ndpi_flows"
-        host_ndpi_flows = new_samples.loc[host_ndpi_measurements]
+        host_ndpi_flows_measurements = new_samples["_measurement"]=="host:ndpi_flows"
+        host_ndpi_flows = new_samples.loc[host_ndpi_flows_measurements]
         host_ndpi_flows_cat = host_ndpi_flows["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
-        try:
-            new_samples.loc[host_ndpi_measurements, "_field"] += ("__" + host_ndpi_flows_cat)
-        except Exception as e:
-            import pdb; pdb.set_trace() 
+        new_samples.loc[host_ndpi_flows_measurements, "_field"] += ("__" + host_ndpi_flows_cat)
         # Transforming existing ndpi bytes to measurements ..... #
-        host_ndpi_bytes = new_samples.loc[new_samples["_measurement"]=="host:ndpi"]
+        host_ndpi_bytes_measurements = new_samples["_measurement"]=="host:ndpi"
+        host_ndpi_bytes = new_samples.loc[host_ndpi_bytes_measurements]
         host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
-        new_samples.loc[host_ndpi_bytes.index, "_field"] += ("__" + host_ndpi_bytes_cat)
+        new_samples.loc[host_ndpi_bytes_measurements, "_field"] += ("__" + host_ndpi_bytes_cat)
         # Device category ..... #
         new_samples['device_category'] = self.category_map(new_samples)
         # Building dframe ..... # 
