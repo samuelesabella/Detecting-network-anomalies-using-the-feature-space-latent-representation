@@ -19,11 +19,9 @@
 
 [http]
   enabled = true 
-  https-enabled = true 
+  https-enabled = false
   max-row-limit = 0
   flux-enabled = true
-  https-certificate = "/app/keys/influxdb.pem"
-  https-private-key = "/app/keys/influxdb.key"
 
 [subscriber]
   http-timeout = "30m"
