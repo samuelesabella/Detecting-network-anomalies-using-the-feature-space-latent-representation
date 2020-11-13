@@ -27,7 +27,7 @@ ip link add fake_nic type dummy && \
   ifconfig fake_nic mtu 20000
 
 # Starging ntopng ..... #
-ntopng --disable-login=1 --interface=fake_nic --https-port=0.0.0.0:3900 -m $LOCALNET & # 1>/dev/null &
+ntopng --disable-login=1 --interface=fake_nic --https-port=0.0.0.0:3900 -m $LOCALNET 1>/dev/null &
 sleep 15
 curl --insecure -X POST -d "timeseries_driver=influxdb&ts_post_data_url=http%3A%2F%2Flocalhost%3A8086&influx_dbname=ntopng&toggle_influx_auth=0&influx_username=&influx_password=&ts_high_resolution=60&influx_query_timeout=10&toggle_interface_traffic_rrd_creation=1&interfaces_ndpi_timeseries_creation=both&hosts_ts_creation=full&toggle_local_hosts_one_way_ts=1&hosts_ndpi_timeseries_creation=both&toggle_l2_devices_traffic_rrd_creation=1&l2_devices_ndpi_timeseries_creation=per_category&toggle_system_probes_timeseries=1&toggle_flow_rrds=1&toggle_pools_rrds=1&toggle_vlan_rrds=1&toggle_asn_rrds=1&toggle_country_rrds=1&toggle_ndpi_flows_rrds=1&toggle_internals_rrds=0&csrf=CSRF_TOKEN_NO_SESSION" https://127.0.0.1:3900/lua/admin/prefs.lua > /dev/null
 

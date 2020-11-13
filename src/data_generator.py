@@ -154,7 +154,10 @@ class FluxDataGenerator():
         host_ndpi_measurements = new_samples["_measurement"]=="host:ndpi_flows"
         host_ndpi_flows = new_samples.loc[host_ndpi_measurements]
         host_ndpi_flows_cat = host_ndpi_flows["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
-        new_samples.loc[host_ndpi_measurements, "_field"] += ("__" + host_ndpi_flows_cat)
+        try:
+            new_samples.loc[host_ndpi_measurements, "_field"] += ("__" + host_ndpi_flows_cat)
+        except Exception as e:
+            import pdb; pdb.set_trace() 
         # Transforming existing ndpi bytes to measurements ..... #
         host_ndpi_bytes = new_samples.loc[new_samples["_measurement"]=="host:ndpi"]
         host_ndpi_bytes_cat = host_ndpi_bytes["protocol"].str.lower().map(ntopng_c.NDPI_VALUE2CAT)
