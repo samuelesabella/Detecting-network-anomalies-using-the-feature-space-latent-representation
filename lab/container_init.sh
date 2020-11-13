@@ -17,7 +17,7 @@ echo "-------------------"
 ls /etc/ssl/
 echo "-------------------"
 export INFLUXDB_CONFIG_PATH=/app/tesi_sabella/lab/influxd_config
-service influxdb start
+service influxdb restart
 # influxd -config /app/tesi_sabella/lab/influxd_config & # 1>/dev/null 2>/dev/null &
 
 eval $(ssh-agent) && \
