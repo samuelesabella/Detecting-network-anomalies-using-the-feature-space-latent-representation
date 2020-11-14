@@ -307,7 +307,7 @@ SIX_IS_THE_MAGIK_NUM = set({
 BASIC_LEVEL_HIGH = set({
     "active_flows:flows_as_client", "active_flows:flows_as_server",
     "total_flows:flows_as_client", "total_flows:flows_as_server",
-    "alerted_flows:flows_as_client", "alerted_flows:flows_as_server",
+    "misbehaving_flows:flows_as_client", "misbehaving_flows:flows_as_server",
     "unreachable_flows:flows_as_client", "unreachable_flows:flows_as_server",
     "host_unreachable_flows:flows_as_client", "host_unreachable_flows:flows_as_server",
     "dns_qry_rcvd_rsp_sent:queries_packets",
@@ -325,7 +325,7 @@ FEATURES_COMPLETE |= NDPI_FLOWS_COMPLETE | NDPI_BYTES_RCVD_COMPLETE | NDPI_BYTES
 
 NON_DECREASING = ["dns_qry_sent_rsp_rcvd:", "dns_qry_rcvd_rsp_sent:", 
                   "echo_packets:", "echo_reply_packets:", "host_unreachable_flows:",
-                  "alerted_flows:", "ndpi:", "tcp_packets:", "tcp_rx_stats:",
+                  "misbehaving_flows:", "ndpi:", "tcp_packets:", "tcp_rx_stats:",
                   "tcp_tx_stats:", "total_flows:", "traffic:", "udp_pkts:", "udp_sent_unicast:",
                   "unreachable_flows:"]
 NON_DECREASING = list(filter(lambda x: any([f in x for f in NON_DECREASING]), FEATURES_COMPLETE))

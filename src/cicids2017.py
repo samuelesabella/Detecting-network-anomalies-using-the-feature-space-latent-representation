@@ -32,7 +32,7 @@ np.random.seed(SEED)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WINDOW_OVERLAPPING = .45
 PATIENCE = 75
-FLEVEL = "MAGIK"
+FLEVEL = "NF_BL"
 
 LOSS = cb.Contextual_Coherency
 

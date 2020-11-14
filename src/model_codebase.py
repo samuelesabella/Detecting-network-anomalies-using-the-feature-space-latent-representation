@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -65,7 +65,8 @@ def ts_windowing(df, overlapping=.95):
             samples["end_time"].append(context["_time"].max().timestamp())
 
             actv1_isnormal = (context[:ACTIVITY_LEN]["isanomaly"] == "none").all()
-            actv2_attack_frac = (context[ACTIVITY_LEN:]["isanomaly"] != "none").value_counts()[False] / ACTIVITY_LEN
+            actv2 = context[ACTIVITY_LEN:]
+            actv2_attack_frac = len(actv2[actv2["isanomaly"] != "none"]) / ACTIVITY_LEN
             actv2_isattack = actv2_attack_frac >= .5
             isanomaly = actv1_isnormal and actv2_isattack 
             # isanomaly = NORMAL_TRAFFIC if (context["isanomaly"]=="none").all() else ATTACK_TRAFFIC
@@ -73,7 +74,7 @@ def ts_windowing(df, overlapping=.95):
 
             attack_type = "none"
             if isanomaly == ATTACK_TRAFFIC:
-                attack_type = np.unique(context["isanomaly"][context["isanomaly"]!="none"])[0]
+                attack_type = actv2.loc[actv2["isanomaly"]!="none", "isanomaly"].iloc[0]
             samples["attack_type"].append(attack_type)
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
@@ -278,11 +279,11 @@ class AnchorTs2Vec(torch.nn.Module):
 class STC(AnchorTs2Vec):
     def __init__(self):
         super(STC, self).__init__() 
-        self.rnn = nn.GRU(input_size=11, hidden_size=32, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(input_size=62, hidden_size=128, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(32, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU())
 
     def toembedding(self, x):
