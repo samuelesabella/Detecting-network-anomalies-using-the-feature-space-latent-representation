@@ -25,11 +25,11 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available(
 NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
-CONTEXT_LEN = 112 # context window length, 28 minutes with 4spm (sample per minutes) 
-ACTIVITY_LEN = 56 # activity window length, 14 minutes 
+CONTEXT_LEN = 80 # context window length, 28 minutes with 4spm (sample per minutes) 
+ACTIVITY_LEN = 40 # activity window length, 14 minutes 
 
 # Triplet margins
-BETA_1 = .2
+BETA_1 = .1
 BETA_2 = .4
 
 
@@ -64,13 +64,11 @@ def ts_windowing(df, overlapping=.95):
             samples["start_time"].append(context["_time"].min().timestamp())
             samples["end_time"].append(context["_time"].max().timestamp())
 
-            # actv1_no_attack = (context[:ACTIVITY_LEN]["isanomaly"]=="none").any()
-            # actv2_attack = (context[ACTIVITY_LEN:]["isanomaly"]!="none").any()
-
-            # actv1_attack = (context[:ACTIVITY_LEN]["isanomaly"]!="none").any()
-            # actv2_no_attack = (context[ACTIVITY_LEN:]["isanomaly"]=="none").any()
-            # is_anomaly = (actv1_no_attack and actv2_attack) or (actv1_attack and actv2_no_attack)
-            isanomaly = NORMAL_TRAFFIC if (context["isanomaly"]=="none").all() else ATTACK_TRAFFIC
+            actv1_isnormal = (context[:ACTIVITY_LEN]["isanomaly"] == "none").all()
+            actv2_attack_frac = (context[ACTIVITY_LEN:]["isanomaly"] != "none").value_counts()[False] / ACTIVITY_LEN
+            actv2_isattack = actv2_attack_frac >= .5
+            isanomaly = actv1_isnormal and actv2_isattack 
+            # isanomaly = NORMAL_TRAFFIC if (context["isanomaly"]=="none").all() else ATTACK_TRAFFIC
             samples["isanomaly"].append(isanomaly)
 
             attack_type = "none"

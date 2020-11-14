@@ -30,7 +30,7 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .95
+WINDOW_OVERLAPPING = .45
 PATIENCE = 75
 FLEVEL = "MAGIK"
 
@@ -272,19 +272,14 @@ def trainsplit(dd, ts_perc):
 
 
 def prepare_dataset(df, outpath):
-    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
-    
-    # Monday ..... #
-    df_monday = df[df.index.get_level_values("_time").day == 3]
-    df_monday = pr.preprocessing(df_monday, update=False)
-    monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
+    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=True)
  
     # validation/test ..... #
     net_dset = defaultdict(list)
     target_server_dset = defaultdict(list)
     for d in [4, 5, 6, 7]:
         day_traffic = df[df.index.get_level_values("_time").day == d]
-        day_traffic_preproc = pr.preprocessing(day_traffic, update=False)
+        day_traffic_preproc = pr.preprocessing(day_traffic, update=False if d!=4 else True)
 
         net_mask = day_traffic_preproc.index.get_level_values("host") != "192.168.10.50"
         target_mask = np.invert(net_mask)
@@ -296,13 +291,21 @@ def prepare_dataset(df, outpath):
         target_windows = cb.ts_windowing(day_traffic_preproc[target_mask], overlapping=WINDOW_OVERLAPPING)
         for k, v in target_windows.items():
             target_server_dset[k].append(v)
+    
+    # Monday ..... #
+    df_monday = df[df.index.get_level_values("_time").day == 3]
+    df_monday = pr.preprocessing(df_monday, update=False)
+    monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
+
     training = { k: np.concatenate(v) for k, v in net_dset.items() }
     validation = { k: np.concatenate(v) for k, v in target_server_dset.items() }
     validation = { k: np.concatenate([v, monday[k]]) for k, v in validation.items() }
 
-    # Removing attacks from training data ..... #
+    training_attacks = np.where(training["isanomaly"] == True)[0]
+    validation = { k: np.concatenate([v, training[k][training_attacks]]) for k, v in validation.items() }
     normal_training_mask = np.where(training["isanomaly"] == False)[0]
     training = { k: x[normal_training_mask] for k, x in training.items() }
+
     validation, testing = trainsplit(validation, .33)
 
     return monday, training, validation, testing
