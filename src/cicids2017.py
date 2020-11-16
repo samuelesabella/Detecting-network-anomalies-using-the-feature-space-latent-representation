@@ -11,6 +11,7 @@ from skorch.net import NeuralNet
 from tqdm import tqdm
 import argparse
 import data_generator as generator
+from datetime import datetime
 import logging
 import gzip
 import _pickle as cPickle
@@ -115,7 +116,7 @@ class Cicids2017Preprocessor(generator.Preprocessor):
             df.loc[host_selector & time_selector, "isanomaly"] = f"{atype}__{adetail}"
         return df
     
-    def preprocessing(self, df, **kwargs):
+    def preprocessing(self, df, fit=False):
         # Filtering hosts ..... #
         df = df[df.index.get_level_values('host').str.contains("192.168.10.")]
         df = df.drop(["host_unreachable_flows:flows_as_client",
@@ -126,7 +127,14 @@ class Cicids2017Preprocessor(generator.Preprocessor):
         working_hours = (index_hours > 8) & (index_hours < 17)
         df = df[working_hours]
         # Passing the ball ..... #
-        preproc_df = super().preprocessing(df, **kwargs)
+        days_df = []
+        days = np.unique(df.index.get_level_values("_time").day)
+        for d in days:
+            d = df[df.index.get_level_values("_time").day == d]
+            d = super().preprocessing(df, fit=False)
+            days_df.append(d)
+        preproc_df = pd.concat(days_df)
+        preproc_df = self.discretize(preproc_df, fit)
     
         return Cicids2017Preprocessor.label(preproc_df)
 
@@ -270,53 +278,56 @@ def trainsplit(dd, ts_perc):
         ts[k] = dd[k][ts_idxs]
     return tr, ts
 
-
 def prepare_dataset(df, outpath):
     pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
+    
+    validation_day = 3 # Monday
+    week_mask = df.index.get_level_values("_time").day != validation_day
+    
+    df_training = df[week_mask]
+    df_training = pr.preprocessing(df_training, fit=True)
+    
+    df_validation = df[np.bitwise_not(week_mask)]
+    df_validation = pr.preprocessing(df_validation)
  
     # validation/test ..... #
-    week_dset = defaultdict(list)
+    training_windows = defaultdict(list)
     for d in [4, 5, 6, 7]:
-        day_traffic = df[df.index.get_level_values("_time").day == d]
-        day_traffic_preproc = pr.preprocessing(day_traffic, update=False)
+        day_df = df_training[df_training.index.get_level_values("_time").day == d]
+        day_windows = cb.ts_windowing(day_df, overlapping=WINDOW_OVERLAPPING)
 
-        week_windows = cb.ts_windowing(day_traffic_preproc, overlapping=WINDOW_OVERLAPPING)
-        for k, v in week_windows.items():
-            week_dset[k].append(v)
-    
+        for k, v in day_windows.items():
+            training_windows[k].append(v)
+    training = { k: np.concatenate(v) for k, v in training_windows.items() }
+
     # Monday ..... #
-    df_monday = df[df.index.get_level_values("_time").day == 3]
-    df_monday = pr.preprocessing(df_monday, update=False)
-    monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
+    validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING)
 
     # Training/Validation ..... #
-    training = { k: np.concatenate(v) for k, v in week_dset.items() }
-    validation = monday 
-    # Adding attacks ..... #
-    training_attacks_mask = np.where(training["isanomaly"] == True)[0]
+    attacks_training_mask = np.where(training["isanomaly"] == True)[0]
     normal_training_mask = np.where(training["isanomaly"] == False)[0]
-    validation = { k: np.concatenate([v, training[k][training_attacks_mask]]) for k, v in validation.items() }
+    # Adding attacks in training to validation
+    validation = { k: np.concatenate([v, training[k][attacks_training_mask]]) for k, v in validation.items() }
+    # Filtering out attacks in training
     training = { k: x[normal_training_mask] for k, x in training.items() }
 
     validation, testing = trainsplit(validation, .33)
 
-    return monday, training, validation, testing
+    return training, validation, testing
 
 
-def store_dataset(monday, training, validation, testing, path):
+def store_dataset(training, validation, testing, path):
     path.mkdir(parents=True, exist_ok=True)
-    cPickle.dump(monday, gzip.open(path / "monday.pkl", "wb"))
     cPickle.dump(training, gzip.open(path / "training.pkl", "wb"))
     cPickle.dump(validation, gzip.open(path / "validation.pkl", "wb"))
     cPickle.dump(testing, gzip.open(path / "testing.pkl", "wb"))
 
 
 def load_dataset(path):
-    monday = cPickle.load(gzip.open(path / "monday.pkl", "rb"))
     training = cPickle.load(gzip.open(path / "training.pkl", "rb"))
     validation = cPickle.load(gzip.open(path / "validation.pkl", "rb"))
     testing = cPickle.load(gzip.open(path / "testing.pkl", "rb"))
-    return monday, training, validation, testing
+    return training, validation, testing
 
 
 def Dataset2GPU(dataset):
@@ -326,7 +337,7 @@ def Dataset2GPU(dataset):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    # logging.basicConfig(level=logging.DEBUG)
 
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--datapath", "-d", help="Dataset directory", required=True, type=Path)
@@ -340,16 +351,16 @@ if __name__ == "__main__":
     df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists():
-        monday, training, validation, testing = load_dataset(dataset_cache)
+        training, validation, testing = load_dataset(dataset_cache)
     else:
-        monday, training, validation, testing = prepare_dataset(df, args.outpath)
-        store_dataset(monday, training, validation, testing, dataset_cache) 
+        training, validation, testing = prepare_dataset(df, args.outpath)
+        store_dataset(training, validation, testing, dataset_cache) 
 
-    monday = Dataset(*cb.dataset2tensors(monday))
     training = Dataset(*cb.dataset2tensors(training))
     validation = Dataset(*cb.dataset2tensors(validation))
     testing = Dataset(*cb.dataset2tensors(testing))
-    Dataset2GPU(monday); Dataset2GPU(training);
+
+    Dataset2GPU(training);
     Dataset2GPU(validation); Dataset2GPU(testing);
 
     if args.grid: 
@@ -358,7 +369,7 @@ if __name__ == "__main__":
             "batch_size": [ 1024, 2048, 4096 ],
             "max_epochs": [ 2600 ],
         })
-        grid_search(monday, labeled_train, grid_params, args.outpath)
+        grid_search(training, validation, grid_params, args.outpath)
     else:
         ts2vec, res = ts2vec_cicids2017(training, validation, args.outpath)
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")

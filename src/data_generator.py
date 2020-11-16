@@ -1,4 +1,5 @@
 from collections import defaultdict
+from sklearn import preprocessing
 import signal
 import influxdb_client
 from influxdb_client import InfluxDBClient
@@ -11,6 +12,7 @@ import pandas as pd
 import pathlib 
 import logging
 import pyfluxc.pyfluxc as flux
+from pyts.approximation import SymbolicAggregateApproximation as SAX
 import re
 import requests 
 import sys
@@ -37,17 +39,17 @@ class Preprocessor():
         self.flevel = flevel 
         self.compute_deltas = deltas
         self.compute_discrtz = discretize
-        self.column_kbins = defaultdict(lambda: KBinsDiscretizer(n_bins=25, encode="ordinal", strategy="quantile"))
+        self.discretizer = KBinsDiscretizer(n_bins=15, encode="ordinal") 
 
     @staticmethod
     def date_as_feature(df):
         time_indx = df.index.get_level_values("_time")
     
         weekend_map = defaultdict(lambda: 0, { 5: 1, 6: 1 })
-        df["is_weekend"] = time_indx.dayofweek.map(weekend_map)
+        df["time:is_weekend"] = time_indx.dayofweek.map(weekend_map)
         
         mapped_hours = time_indx.hour.map(hour2ts).values.tolist() 
-        hours_df = pd.DataFrame(mapped_hours, columns=["morning", "afternoon", "evening", "night"], index=df.index)
+        hours_df = pd.DataFrame(mapped_hours, columns=["time:morning", "time:afternoon", "time:evening", "time:night"], index=df.index)
         df = pd.concat([df, hours_df], axis=1)
         return df
     
@@ -61,11 +63,16 @@ class Preprocessor():
         df.loc[missing_traffic] = r_mean[missing_traffic]
         return df
     
-    def updatekbins(self, key, values):
-        kbins = self.column_kbins[key]
-        kbins.fit(values)
+    def discretize(self, df, fit=False):
+        tc = [c for c in df.columns if (("ndpi_flows:num_flows" not in c) and ("time:" not in c))]
+        values = df[tc].values
+        if fit:
+            df[tc] = self.discretizer.fit_transform(values)
+        else:
+            df[tc] = self.discretizer.transform(values)
+        return df
 
-    def preprocessing(self, df, update=True):
+    def preprocessing(self, df, fit=False):
         smart_features = set(ntopng_c.FEATURE_LEVELS[self.flevel])
         available_features = set(df.columns)
         available_cols = available_features.intersection(smart_features)
@@ -94,17 +101,13 @@ class Preprocessor():
         # Note: we avoided using pandas qcut/cut due to the decoupling between fit and transform 
         #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
         #       with weekly data and used multiple times while the model is running
-        non_dpi = [c for c in df.columns if c not in ndpi_num_flows_c]
-        if update:
-            df[non_dpi].apply(lambda cs: self.column_kbins[cs.name].fit(cs.values.reshape(-1, 1)), axis=0)
         if self.compute_discrtz:
-            df[non_dpi] = df[non_dpi].apply(lambda cs: self.column_kbins[cs.name].transform(cs.values.reshape(-1, 1)).reshape(-1), axis=0)
+            df = self.discretize(df, fit)
 
         # Date/hour as a feature ..... #
         df = Preprocessor.date_as_feature(df)
         
         return df
-
 
 
 # ----- ----- HOST DATA GENERATOR ----- ----- #
