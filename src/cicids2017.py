@@ -31,7 +31,7 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .99
+WINDOW_OVERLAPPING = .85
 PATIENCE = 250
 FLEVEL = "BL"
 
@@ -298,12 +298,10 @@ def prepare_dataset(df, outpath):
 
         for k, v in day_windows.items():
             training_windows[k].append(v)
-    training = { k: np.concatenate(v) for k, v in training_windows.items() }
 
-    # Monday ..... #
+    training = { k: np.concatenate(v) for k, v in training_windows.items() }
     validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING)
 
-    # Training/Validation ..... #
     attacks_training_mask = np.where(training["isanomaly"] == True)[0]
     normal_training_mask = np.where(training["isanomaly"] == False)[0]
     # Adding attacks in training to validation
