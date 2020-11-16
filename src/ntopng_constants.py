@@ -336,6 +336,7 @@ NON_DECREASING = list(filter(lambda x: any([f in x for f in NON_DECREASING]), FE
 FEATURE_LEVELS = {
     "MAGIK": SIX_IS_THE_MAGIK_NUM,
     "NF_BL": NDPI_FLOWS_COMPLETE | BASIC_FEATURES,
+    "BL": BASIC_FEATURES,
     "NF_BLH": NDPI_FLOWS_COMPLETE | BASIC_LEVEL_HIGH,
     "NF_BLMISC": NDPI_FLOWS_COMPLETE | set({
         "active_flows:flows_as_server", "active_flows:flows_as_client",

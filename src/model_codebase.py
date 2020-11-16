@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -29,8 +29,8 @@ CONTEXT_LEN = 80 # context window length, 28 minutes with 4spm (sample per minut
 ACTIVITY_LEN = 40 # activity window length, 14 minutes 
 
 # Triplet margins
-BETA_1 = .1
-BETA_2 = .4
+BETA_1 = .01
+BETA_2 = .1
 
 
 # ----- ----- DATA RESHAPING ----- ----- #
@@ -57,6 +57,12 @@ def ts_windowing(df, overlapping=.95):
         # Building context/activity windows ..... #
         windows = dfwindowed(ts, CONTEXT_LEN, window_stepsize)
         for context in windows:
+            attack_perc = len(context[context["isanomaly"] != "none"]) / CONTEXT_LEN
+            if 0 < attack_perc < .25 or attack_perc > .75:
+                continue
+            isanomaly = NORMAL_TRAFFIC if attack_perc == .0 else ATTACK_TRAFFIC
+            samples["isanomaly"].append(isanomaly)
+
             ctxvalues = context.drop(columns=["_time", "host", "device_category", "isanomaly"]).values
             samples["context"].append(ctxvalues)
             samples["host"].append(host)
@@ -64,17 +70,9 @@ def ts_windowing(df, overlapping=.95):
             samples["start_time"].append(context["_time"].min().timestamp())
             samples["end_time"].append(context["_time"].max().timestamp())
 
-            actv1_isnormal = (context[:ACTIVITY_LEN]["isanomaly"] == "none").all()
-            actv2 = context[ACTIVITY_LEN:]
-            actv2_attack_frac = len(actv2[actv2["isanomaly"] != "none"]) / ACTIVITY_LEN
-            actv2_isattack = actv2_attack_frac >= .5
-            isanomaly = actv1_isnormal and actv2_isattack 
-            # isanomaly = NORMAL_TRAFFIC if (context["isanomaly"]=="none").all() else ATTACK_TRAFFIC
-            samples["isanomaly"].append(isanomaly)
-
             attack_type = "none"
             if isanomaly == ATTACK_TRAFFIC:
-                attack_type = actv2.loc[actv2["isanomaly"]!="none", "isanomaly"].iloc[0]
+                attack_type = context.loc[context["isanomaly"]!="none", "isanomaly"].iloc[0]
             samples["attack_type"].append(attack_type)
     samples = { k: np.stack(v) for k, v in samples.items() }
     return samples
@@ -145,7 +143,7 @@ def find_neg_anchors(e_actv, e_ap, start_time, end_time, host, device_category):
     # Removing diagonal
     fmatrix += sys.maxsize * (torch.eye(n, n))
     # Getting the minimum
-    idxs = fast_filter(fmatrix, device_category) 
+    idxs = fast_filter(fmatrix, host) 
     dn = e_actv[idxs]
     
     return dn
@@ -269,9 +267,10 @@ class AnchorTs2Vec(torch.nn.Module):
         actv = context[:, :ACTIVITY_LEN]
         e_actv = self.toembedding(actv) 
 
+        ap = context[:, ACTIVITY_LEN:] 
+        e_ap = self.toembedding(ap)
+
         with torch.no_grad():
-            ap = context[:, ACTIVITY_LEN:] 
-            e_ap = self.toembedding(ap)
             e_an = find_neg_anchors(e_actv, e_ap, start_time, end_time, host, device_category)
         return (e_actv, e_ap, e_an)
 
@@ -279,11 +278,11 @@ class AnchorTs2Vec(torch.nn.Module):
 class STC(AnchorTs2Vec):
     def __init__(self):
         super(STC, self).__init__() 
-        self.rnn = nn.GRU(input_size=62, hidden_size=128, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(input_size=38, hidden_size=64, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(128, 128),
+            nn.Linear(64, 64),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(64, 64),
             nn.ReLU())
 
     def toembedding(self, x):
