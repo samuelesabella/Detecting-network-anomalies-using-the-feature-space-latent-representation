@@ -30,9 +30,9 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .45
-PATIENCE = 75
-FLEVEL = "NF_BL"
+WINDOW_OVERLAPPING = .99
+PATIENCE = 250
+FLEVEL = "BL"
 
 LOSS = cb.Contextual_Coherency
 
@@ -272,38 +272,30 @@ def trainsplit(dd, ts_perc):
 
 
 def prepare_dataset(df, outpath):
-    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=True)
+    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
  
     # validation/test ..... #
-    net_dset = defaultdict(list)
-    target_server_dset = defaultdict(list)
+    week_dset = defaultdict(list)
     for d in [4, 5, 6, 7]:
         day_traffic = df[df.index.get_level_values("_time").day == d]
-        day_traffic_preproc = pr.preprocessing(day_traffic, update=False if d!=4 else True)
+        day_traffic_preproc = pr.preprocessing(day_traffic, update=False)
 
-        net_mask = day_traffic_preproc.index.get_level_values("host") != "192.168.10.50"
-        target_mask = np.invert(net_mask)
-
-        net_windows = cb.ts_windowing(day_traffic_preproc[net_mask], overlapping=WINDOW_OVERLAPPING)
-        for k, v in net_windows.items():
-            net_dset[k].append(v)
-
-        target_windows = cb.ts_windowing(day_traffic_preproc[target_mask], overlapping=WINDOW_OVERLAPPING)
-        for k, v in target_windows.items():
-            target_server_dset[k].append(v)
+        week_windows = cb.ts_windowing(day_traffic_preproc, overlapping=WINDOW_OVERLAPPING)
+        for k, v in week_windows.items():
+            week_dset[k].append(v)
     
     # Monday ..... #
     df_monday = df[df.index.get_level_values("_time").day == 3]
     df_monday = pr.preprocessing(df_monday, update=False)
     monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
 
-    training = { k: np.concatenate(v) for k, v in net_dset.items() }
-    validation = { k: np.concatenate(v) for k, v in target_server_dset.items() }
-    validation = { k: np.concatenate([v, monday[k]]) for k, v in validation.items() }
-
-    training_attacks = np.where(training["isanomaly"] == True)[0]
-    validation = { k: np.concatenate([v, training[k][training_attacks]]) for k, v in validation.items() }
+    # Training/Validation ..... #
+    training = { k: np.concatenate(v) for k, v in week_dset.items() }
+    validation = monday 
+    # Adding attacks ..... #
+    training_attacks_mask = np.where(training["isanomaly"] == True)[0]
     normal_training_mask = np.where(training["isanomaly"] == False)[0]
+    validation = { k: np.concatenate([v, training[k][training_attacks_mask]]) for k, v in validation.items() }
     training = { k: x[normal_training_mask] for k, x in training.items() }
 
     validation, testing = trainsplit(validation, .33)
