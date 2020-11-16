@@ -30,7 +30,7 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .99
+WINDOW_OVERLAPPING = .85
 PATIENCE = 250
 FLEVEL = "BL"
 
@@ -272,21 +272,21 @@ def trainsplit(dd, ts_perc):
 
 
 def prepare_dataset(df, outpath):
-    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
+    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=True)
  
     # validation/test ..... #
     week_dset = defaultdict(list)
-    for d in [4, 5, 6, 7]:
+    for d in [3, 4, 5, 6]:
         day_traffic = df[df.index.get_level_values("_time").day == d]
-        day_traffic_preproc = pr.preprocessing(day_traffic, update=False)
+        day_traffic_preproc = pr.preprocessing(day_traffic, update=True if d==3 else False)
 
         week_windows = cb.ts_windowing(day_traffic_preproc, overlapping=WINDOW_OVERLAPPING)
         for k, v in week_windows.items():
             week_dset[k].append(v)
     
     # Monday ..... #
-    df_monday = df[df.index.get_level_values("_time").day == 3]
-    df_monday = pr.preprocessing(df_monday, update=False)
+    df_monday = df[df.index.get_level_values("_time").day == 7]
+    df_monday = pr.preprocessing(df_monday)
     monday = cb.ts_windowing(df_monday, overlapping=WINDOW_OVERLAPPING)
 
     # Training/Validation ..... #
