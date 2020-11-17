@@ -1,4 +1,5 @@
 from collections import defaultdict
+import os
 import math
 from sklearn.model_selection import train_test_split
 from pathlib import Path
@@ -31,7 +32,7 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .85
+WINDOW_OVERLAPPING = .45
 PATIENCE = 250
 FLEVEL = "BL"
 
@@ -183,7 +184,7 @@ def history2dframe(net, labels=None):
     return s.infer_objects()
 
 
-def ts2vec_cicids2017(train, test, outpath):
+def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
     dist_plot = cb.DistPlot(outpath)
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     rec_prec_plot = cb.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
@@ -194,15 +195,15 @@ def ts2vec_cicids2017(train, test, outpath):
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             # *cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.recall_score).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.precision_score).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.recall_score, data=validation_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.precision_score, data=validation_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.roc_auc_score, data=validation_attacks).epoch_score(on_train=False),
             dist_plot, loss_plot, rec_prec_plot,
             EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
 
     # Retrain on whole dataset ..... #
-    net.train_split = predefined_split(test)
+    net.train_split = predefined_split(validation)
     net.fit(train)
     
     return net.module_, history2dframe(net)
@@ -304,28 +305,38 @@ def prepare_dataset(df, outpath):
 
     attacks_training_mask = np.where(training["isanomaly"] == True)[0]
     normal_training_mask = np.where(training["isanomaly"] == False)[0]
+    attacks_validation_mask = np.where(validation["isanomaly"] == True)[0]
+    normal_validation_mask = np.where(validation["isanomaly"] == False)[0]
+
     # Adding attacks in training to validation
-    validation = { k: np.concatenate([v, training[k][attacks_training_mask]]) for k, v in validation.items() }
+    validation_attacks = { k: np.concatenate([v, training[k][attacks_training_mask]]) for k, v in validation.items() }
     # Filtering out attacks in training
     training = { k: x[normal_training_mask] for k, x in training.items() }
+    validation = { k: x[normal_validation_mask] for k, x in validation.items() }
 
     validation, testing = trainsplit(validation, .33)
+    validation_attacks, testing_attacks = trainsplit(validation_attacks, .33) 
 
-    return training, validation, testing
+    datasets = { "training": training, "validation": validation, "testing": testing, 
+                 "validation_attacks": validation_attacks, "testing_attacks": testing_attacks }
+    return datasets
 
 
-def store_dataset(training, validation, testing, path):
+def store_dataset(path, datasets):
     path.mkdir(parents=True, exist_ok=True)
-    cPickle.dump(training, gzip.open(path / "training.pkl", "wb"))
-    cPickle.dump(validation, gzip.open(path / "validation.pkl", "wb"))
-    cPickle.dump(testing, gzip.open(path / "testing.pkl", "wb"))
+    for k, v in datasets.items():
+        cPickle.dump(v, gzip.open(path / f"{k}.pkl", "wb"))
 
 
 def load_dataset(path):
-    training = cPickle.load(gzip.open(path / "training.pkl", "rb"))
-    validation = cPickle.load(gzip.open(path / "validation.pkl", "rb"))
-    testing = cPickle.load(gzip.open(path / "testing.pkl", "rb"))
-    return training, validation, testing
+    datasets = {}
+    for f in os.listdir(path):
+        if ".pkl" not in f:
+            continue
+        fname = os.path.splitext(f)[0]
+        df = cPickle.load(gzip.open(path / f, "rb"))
+        datasets[fname] = df
+    return datasets
 
 
 def Dataset2GPU(dataset):
@@ -345,21 +356,25 @@ if __name__ == "__main__":
     args.outpath.mkdir(parents=True, exist_ok=True)
 
     # Data loading ..... # 
+    dataset_files = ["training", "validation", "testing", "validation_attacks", "testing_attacks"]
     timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
     df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists():
-        training, validation, testing = load_dataset(dataset_cache)
+        datasets = load_dataset(dataset_cache)
     else:
-        training, validation, testing = prepare_dataset(df, args.outpath)
-        store_dataset(training, validation, testing, dataset_cache) 
+        datasets = prepare_dataset(df, args.outpath)
+        store_dataset(dataset_cache, datasets) 
+
+    training = datasets["training"] 
+    validation = datasets["validation"]; validation_attacks = datasets["validation_attacks"]
 
     training = Dataset(*cb.dataset2tensors(training))
+    Dataset2GPU(training)
     validation = Dataset(*cb.dataset2tensors(validation))
-    testing = Dataset(*cb.dataset2tensors(testing))
-
-    Dataset2GPU(training);
-    Dataset2GPU(validation); Dataset2GPU(testing);
+    Dataset2GPU(validation)
+    validation_attacks = Dataset(*cb.dataset2tensors(validation_attacks))
+    Dataset2GPU(validation_attacks)
 
     if args.grid: 
         grid_params = ParameterGrid({
@@ -369,5 +384,5 @@ if __name__ == "__main__":
         })
         grid_search(training, validation, grid_params, args.outpath)
     else:
-        ts2vec, res = ts2vec_cicids2017(training, validation, args.outpath)
+        ts2vec, res = ts2vec_cicids2017(training, validation, validation_attacks, args.outpath)
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")

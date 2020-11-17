@@ -216,8 +216,9 @@ class DistPlot(skorch.callbacks.Callback):
 
 
 class Ts2VecScore():
-    def __init__(self, measure):
+    def __init__(self, measure, data=None):
         self.measure = measure
+        self.data = data
 
     @property
     def __name__(self):
@@ -238,9 +239,11 @@ class Ts2VecScore():
         return (tr_score, vl_score)
 
     def __call__(self, net, dset=None, y=None):
+        data = dset if self.data is None else self.data
+
         with torch.no_grad():
-            y_hat = net.module_.context_anomaly(dset.X["context"])
-        res = self.measure(y, np.round(y_hat.cpu()))
+            y_hat = net.module_.context_anomaly(data.X["context"])
+        res = self.measure(data.y.cpu(), np.round(y_hat.cpu()))
         return res
 
 
