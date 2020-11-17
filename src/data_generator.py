@@ -101,8 +101,8 @@ class Preprocessor():
         # Note: we avoided using pandas qcut/cut due to the decoupling between fit and transform 
         #       offered by scikit. In the future {KBinsDiscretizer} will be fitted once a week or so
         #       with weekly data and used multiple times while the model is running
-        if self.compute_discrtz:
-            df = self.discretize(df, fit)
+        # if self.compute_discrtz:
+        #     df = self.discretize(df, fit)
 
         # Date/hour as a feature ..... #
         df = Preprocessor.date_as_feature(df)

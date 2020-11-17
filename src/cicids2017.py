@@ -34,7 +34,7 @@ np.random.seed(SEED)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WINDOW_OVERLAPPING = .45
 PATIENCE = 250
-FLEVEL = "BL"
+FLEVEL = "MAGIK"
 
 LOSS = cb.Contextual_Coherency
 
@@ -135,7 +135,8 @@ class Cicids2017Preprocessor(generator.Preprocessor):
             d = super().preprocessing(df, fit=False)
             days_df.append(d)
         preproc_df = pd.concat(days_df)
-        preproc_df = self.discretize(preproc_df, fit)
+        if self.compute_discrtz: 
+            preproc_df = self.discretize(preproc_df, fit)
     
         return Cicids2017Preprocessor.label(preproc_df)
 
@@ -300,22 +301,30 @@ def prepare_dataset(df, outpath):
         for k, v in day_windows.items():
             training_windows[k].append(v)
 
+    # Training: all week, Validation: monday
     training = { k: np.concatenate(v) for k, v in training_windows.items() }
     validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING)
 
+    # Validation attacks: monday + week attacks 
     attacks_training_mask = np.where(training["isanomaly"] == True)[0]
-    normal_training_mask = np.where(training["isanomaly"] == False)[0]
-    attacks_validation_mask = np.where(validation["isanomaly"] == True)[0]
-    normal_validation_mask = np.where(validation["isanomaly"] == False)[0]
-
-    # Adding attacks in training to validation
+    # attacks_training_mask = (training["isanomaly"] == True) & (training["isanomaly"] != "Web Attack")
+    # attacks_training_mask &= (training["isanomaly"] != "Side_channel")
+    # attacks_training_mask &= (training["isanomaly"] != "Infiltration")
     validation_attacks = { k: np.concatenate([v, training[k][attacks_training_mask]]) for k, v in validation.items() }
-    # Filtering out attacks in training
+    
+    # Training: all week (normal traffic only)
+    normal_training_mask = np.where(training["isanomaly"] == False)[0]
     training = { k: x[normal_training_mask] for k, x in training.items() }
-    validation = { k: x[normal_validation_mask] for k, x in validation.items() }
 
-    validation, testing = trainsplit(validation, .33)
+    # validation, testing = trainsplit(validation, .33)
     validation_attacks, testing_attacks = trainsplit(validation_attacks, .33) 
+
+    # Validation and testing: monday only (no attacks)
+    normal_validation_mask = np.where(validation_attacks["isanomaly"] == False)[0]
+    validation = { k: x[normal_validation_mask] for k, x in validation_attacks.items() }
+
+    normal_testing_mask = np.where(testing_attacks["isanomaly"] == False)[0]
+    testing = { k: x[normal_testing_mask] for k, x in testing_attacks.items() }
 
     datasets = { "training": training, "validation": validation, "testing": testing, 
                  "validation_attacks": validation_attacks, "testing_attacks": testing_attacks }
@@ -375,6 +384,10 @@ if __name__ == "__main__":
     Dataset2GPU(validation)
     validation_attacks = Dataset(*cb.dataset2tensors(validation_attacks))
     Dataset2GPU(validation_attacks)
+
+    print(f"training size: {len(training.y)}")
+    print(f"validation size: {len(validation.y)}, normal/attacks: {np.unique(validation.y.cpu(), return_counts=True)[1]}")
+    print(f"validation_attacks size: {len(validation_attacks.y)}, normal/attacks: {np.unique(validation_attacks.y.cpu(), return_counts=True)[1]}")
 
     if args.grid: 
         grid_params = ParameterGrid({

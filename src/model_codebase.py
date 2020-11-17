@@ -1,4 +1,5 @@
 from collections import defaultdict
+import random
 from scipy.stats import truncnorm
 from skorch.callbacks import EpochScoring
 from sklearn import preprocessing
@@ -58,8 +59,8 @@ def ts_windowing(df, overlapping=.95):
         windows = dfwindowed(ts, CONTEXT_LEN, window_stepsize)
         for context in windows:
             attack_perc = len(context[context["isanomaly"] != "none"]) / CONTEXT_LEN
-            if 0 < attack_perc < .25 or attack_perc > .75:
-                continue
+            # if 0 < attack_perc < .25 or attack_perc > .75:
+            #     continue
             isanomaly = NORMAL_TRAFFIC if attack_perc == .0 else ATTACK_TRAFFIC
             samples["isanomaly"].append(isanomaly)
 
@@ -267,11 +268,15 @@ class AnchorTs2Vec(torch.nn.Module):
         return torch.clamp(dist, 0., 1.)
 
     def forward(self, context=None, device_category=None, start_time=None, end_time=None, host=None):
-        actv = context[:, :ACTIVITY_LEN]
-        e_actv = self.toembedding(actv) 
-
-        ap = context[:, ACTIVITY_LEN:] 
+        # actv = context[:, :ACTIVITY_LEN]
+        # e_actv = self.toembedding(actv) 
+        # ap = context[:, ACTIVITY_LEN:] 
+        # e_ap = self.toembedding(ap)
+        r = random.randint(0, CONTEXT_LEN-ACTIVITY_LEN)
+        actv = context[:, r:r+ACTIVITY_LEN]
+        ap = context
         e_ap = self.toembedding(ap)
+        e_actv = self.toembedding(actv)
 
         with torch.no_grad():
             e_an = find_neg_anchors(e_actv, e_ap, start_time, end_time, host, device_category)
@@ -281,7 +286,7 @@ class AnchorTs2Vec(torch.nn.Module):
 class STC(AnchorTs2Vec):
     def __init__(self):
         super(STC, self).__init__() 
-        self.rnn = nn.GRU(input_size=38, hidden_size=64, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(input_size=19, hidden_size=64, num_layers=1, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(64, 64),
             nn.ReLU(),

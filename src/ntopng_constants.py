@@ -300,8 +300,12 @@ BASIC_LEVEL_LOW = set({
 
 SIX_IS_THE_MAGIK_NUM = set({
     "active_flows:flows_as_client", "active_flows:flows_as_server",
+    "contacts:num_as_client", "contacts:num_as_server",
     "unreachable_flows:flows_as_client", "unreachable_flows:flows_as_server",
     "misbehaving_flows:flows_as_client", "misbehaving_flows:flows_as_server",
+    "tcp_rx_stats:lost_packets", "tcp_rx_stats:out_of_order_packets",
+    "tcp_rx_stats:retransmission_packets", "tcp_tx_stats:lost_packets",
+    "tcp_tx_stats:out_of_order_packets", "tcp_tx_stats:retransmission_packets",
 })
 
 BASIC_LEVEL_HIGH = set({
