@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
@@ -265,6 +265,7 @@ class AnchorTs2Vec(torch.nn.Module):
         e_a2 = self.toembedding(a2)
 
         dist = (torch.norm(e_a1 - e_a2, p=2, dim=1) - BETA_1) / BETA_2
+        dist += .25
         return torch.clamp(dist, 0., 1.)
 
     def forward(self, context=None, device_category=None, start_time=None, end_time=None, host=None):
