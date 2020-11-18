@@ -306,10 +306,7 @@ def prepare_dataset(df, outpath):
     validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING)
 
     # Validation attacks: monday + week attacks 
-    attacks_training_mask = (training["isanomaly"] == True) & (training["isanomaly"] != "Web Attack")
-    attacks_training_mask &= (training["isanomaly"] != "Side_channel")
-    attacks_training_mask &= (training["isanomaly"] != "Infiltration")
-    attacks_training_mask = np.where(attacks_training_mask)[0]
+    attacks_training_mask = np.where(training["isanomaly"] == True)[0]
     validation_attacks = { k: np.concatenate([v, training[k][attacks_training_mask]]) for k, v in validation.items() }
     
     # Training: all week (normal traffic only)
