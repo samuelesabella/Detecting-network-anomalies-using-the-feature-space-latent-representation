@@ -1,4 +1,6 @@
 from collections import defaultdict
+from sklearn import metrics
+from sklearn.metrics import classification_report
 import os
 import math
 from sklearn.model_selection import train_test_split
@@ -33,7 +35,7 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WINDOW_OVERLAPPING = .95
-PATIENCE = 25
+PATIENCE = 7
 FLEVEL = "MAGIK"
 
 LOSS = cb.Contextual_Coherency
@@ -192,7 +194,7 @@ def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
     net = NeuralNet(
         cb.STC, LOSS, optimizer=torch.optim.Adam, 
         iterator_train__shuffle=True,
-        lr=1e-4, batch_size=6090, max_epochs=4000,
+        lr=1e-4, batch_size=6090, max_epochs=125,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             # *cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
@@ -200,12 +202,30 @@ def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
             cb.Ts2VecScore(skmetrics.precision_score, data=validation_attacks).epoch_score(on_train=False),
             cb.Ts2VecScore(skmetrics.roc_auc_score, data=validation_attacks).epoch_score(on_train=False),
             dist_plot, loss_plot, rec_prec_plot,
-            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+            EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=PATIENCE)
+            # EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
 
     # Retrain on whole dataset ..... #
     net.train_split = predefined_split(validation)
     net.fit(train)
+
+    # Detection capabilities ..... #
+    y = validation_attacks.y.cpu()
+    y_hat = net.module_.context_anomaly(validation_attacks.X["context"]).detach()
+    y_hat = np.round(y_hat.cpu())
+    
+    report = classification_report(y, y_hat)
+    metrics_rep = [ metrics.roc_auc_score,
+                    metrics.precision_score, metrics.recall_score,
+                metrics.accuracy_score, metrics.f1_score]
+    for m in metrics_rep:
+        mres = m(y, y_hat)
+        print(f"{m.__name__}(moday+attacks): {mres}")
+    tn, fp, fn, tp = metrics.confusion_matrix(y, y_hat, normalize="all").ravel()
+    print("\n Confusion matrix")
+    print(f"\ttp: {tp} \tfp: {fp} \n\tfn: {fn} \ttn: {tn}")
+    print(f"\n{report}")
     
     return net.module_, history2dframe(net)
 
@@ -375,16 +395,20 @@ if __name__ == "__main__":
     training = datasets["training"] 
     validation = datasets["validation"]; validation_attacks = datasets["validation_attacks"]
 
+    train_len = len(training["isanomaly"])
+    print(f"training (week normal): {train_len} samples")
+    val_len = len(validation["isanomaly"])
+    print(f"validation (monday only): {val_len} samples")
+    val_att_len = len(validation_attacks['isanomaly'])
+    val_att_perc = np.unique(validation_attacks["isanomaly"], return_counts=True)[1] / val_att_len
+    print(f"validation_attacks (monday+attacks): {val_att_len} samples, normal/attacks percentage: {val_att_perc}")
+
     training = Dataset(*cb.dataset2tensors(training))
     Dataset2GPU(training)
     validation = Dataset(*cb.dataset2tensors(validation))
     Dataset2GPU(validation)
     validation_attacks = Dataset(*cb.dataset2tensors(validation_attacks))
     Dataset2GPU(validation_attacks)
-
-    print(f"training size: {len(training.y)}")
-    print(f"validation size: {len(validation.y)}, normal/attacks: {np.unique(validation.y.cpu(), return_counts=True)[1]}")
-    print(f"validation_attacks size: {len(validation_attacks.y)}, normal/attacks: {np.unique(validation_attacks.y.cpu(), return_counts=True)[1]}")
 
     if args.grid: 
         grid_params = ParameterGrid({
@@ -395,4 +419,5 @@ if __name__ == "__main__":
         grid_search(training, validation, grid_params, args.outpath)
     else:
         ts2vec, res = ts2vec_cicids2017(training, validation, validation_attacks, args.outpath)
+        print("Terminating, saving the model")
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")
