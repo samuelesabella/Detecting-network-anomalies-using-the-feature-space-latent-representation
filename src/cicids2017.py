@@ -34,11 +34,13 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WINDOW_OVERLAPPING = .95
 PATIENCE = 7
-FLEVEL = "MAGIK"
+MAX_EPOCHS = 2
 
-LOSS = cb.Contextual_Coherency
+WINDOW_OVERLAPPING = .45
+FLEVEL = "MAGIK"
+CONTEXT_LEN = 80 # context window length, 28 minutes with 4spm (sample per minutes) 
+ACTIVITY_LEN = 40 # activity window length, 14 minutes 
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -177,13 +179,19 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
 def history2dframe(net, labels=None):
-    ignore_keys = ["batches", "train_batch_count", "valid_batch_count"]
+    ignore_keys = [ "batches", "train_batch_count", "valid_batch_count" ]
     best_epoch = next(x for x in reversed(net.history) if x["valid_loss_best"])
     if labels:
         best_epoch.update({ f"hyperparam_{k}": v for k, v in labels.items() })
 
     s = pd.Series(best_epoch).to_frame().T
     s = s.drop(columns=ignore_keys)
+    s = s.drop([c for c in s.columns if "best" in c], axis=1)
+    
+    s["ctx_overlapping"] = WINDOW_OVERLAPPING
+    s["features"] = FLEVEL
+    s["ctx_len"] = CONTEXT_LEN
+
     return s.infer_objects()
 
 
@@ -192,7 +200,7 @@ def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     rec_prec_plot = cb.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
     net = NeuralNet(
-        cb.STC, LOSS, optimizer=torch.optim.Adam, 
+        cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
         iterator_train__shuffle=True,
         lr=1e-4, batch_size=6090, max_epochs=125,
         device=DEVICE, verbose=1, train_split=None,
@@ -237,40 +245,35 @@ def setparams(net, params):
         setattr(net, k, v)
 
 
-def grid_search(train, valid, grid_params, outpath):
+def grid_search(train, validation, validation_attacks, grid_params, outpath):
     grid_res = pd.DataFrame()
-    
-    dist_plot = cb.DistPlot(outpath)
-    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
-    net = NeuralNet(
-        cb.STC, LOSS, 
-        optimizer=torch.optim.Adam, device=DEVICE,
-        iterator_train__shuffle=True,
-        verbose=1, train_split=None,
-        callbacks=[
-            dist_plot, loss_plot,
-            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE),
-            cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.recall_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.precision_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.roc_auc_score).epoch_score()
-        ])    
+
+    callbacks=[
+        cb.Ts2VecScore(skmetrics.accuracy_score, data=validation_attacks).epoch_score(on_train=False),
+        cb.Ts2VecScore(skmetrics.f1_score, data=validation_attacks).epoch_score(on_train=False),
+        cb.Ts2VecScore(skmetrics.recall_score, data=validation_attacks).epoch_score(on_train=False),
+        cb.Ts2VecScore(skmetrics.precision_score, data=validation_attacks).epoch_score(on_train=False),
+        cb.Ts2VecScore(skmetrics.roc_auc_score, data=validation_attacks).epoch_score(on_train=False),
+        EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=PATIENCE)]
 
     # Grid search ..... #
     logging.debug("Starting grid search")
     grid_pbar = tqdm(grid_params)
+    import pdb; pdb.set_trace() 
     for params in grid_pbar:  
         grid_pbar.set_description(str(params))
-        setparams(net, params) 
-        dist_plot.set_flabel(params)
-        loss_plot.set_flabel(params)
+        net = NeuralNet(cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam,
+                        **params,  max_epochs=MAX_EPOCHS,
+                        device=DEVICE, iterator_train__shuffle=True, callbacks=callbacks,
+                        verbose=1, train_split=None)
 
-        net.train_split = predefined_split(valid) 
+        net.train_split = predefined_split(validation) 
         net.fit(train)
         grid_res = pd.concat([grid_res, history2dframe(net, params)], ignore_index=True)    
 
         # Get best configuration ..... #
-        grid_res.to_pickle(outpath / "grid_results.pkl")
+        fname = f"gridSearch__features_{FLEVEL}__overlapping_{WINDOW_OVERLAPPING}__ctxlen_{CONTEXT_LEN}.pkl"
+        grid_res.to_pickle(outpath / fname)
 
 
 # ----- ----- MAIN ----- ----- #
@@ -300,7 +303,7 @@ def trainsplit(dd, ts_perc):
         ts[k] = dd[k][ts_idxs]
     return tr, ts
 
-def prepare_dataset(df, outpath):
+def prepare_dataset(df):
     pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
     
     validation_day = 3 # Monday
@@ -316,14 +319,14 @@ def prepare_dataset(df, outpath):
     training_windows = defaultdict(list)
     for d in [4, 5, 6, 7]:
         day_df = df_training[df_training.index.get_level_values("_time").day == d]
-        day_windows = cb.ts_windowing(day_df, overlapping=WINDOW_OVERLAPPING)
+        day_windows = cb.ts_windowing(day_df, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
 
         for k, v in day_windows.items():
             training_windows[k].append(v)
 
     # Training: all week, Validation: monday
     training = { k: np.concatenate(v) for k, v in training_windows.items() }
-    validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING)
+    validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
 
     # Validation attacks: monday + week attacks 
     attacks_training_mask = np.where(training["isanomaly"] == True)[0]
@@ -372,12 +375,11 @@ def Dataset2GPU(dataset):
 
 
 if __name__ == "__main__":
-    # logging.basicConfig(level=logging.DEBUG)
-
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--datapath", "-d", help="Dataset directory", required=True, type=Path)
     parser.add_argument("--grid", "-g", help="Start grid search", default=False, action="store_true")
     parser.add_argument("--outpath", "-o", help="Grid-search output file", required=True, type=Path)
+    parser.add_argument("--reset_data", "-r", help="Recreates the dataset", default=False, action="store_true")
     args = parser.parse_args()
     args.outpath.mkdir(parents=True, exist_ok=True)
 
@@ -386,14 +388,15 @@ if __name__ == "__main__":
     timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
     df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
-    if dataset_cache.exists():
+    if dataset_cache.exists() and not args.reset_data:
         datasets = load_dataset(dataset_cache)
     else:
-        datasets = prepare_dataset(df, args.outpath)
+        datasets = prepare_dataset(df)
         store_dataset(dataset_cache, datasets) 
 
     training = datasets["training"] 
     validation = datasets["validation"]; validation_attacks = datasets["validation_attacks"]
+    input_size = training["context"].shape[-1]
 
     train_len = len(training["isanomaly"])
     print(f"training (week normal): {train_len} samples")
@@ -412,11 +415,14 @@ if __name__ == "__main__":
 
     if args.grid: 
         grid_params = ParameterGrid({
-            "lr": [ 1e-3, 5e-4, 1e-4, 5e-5, 1e-5 ],
-            "batch_size": [ 1024, 2048, 4096 ],
-            "max_epochs": [ 2600 ],
-        })
-        grid_search(training, validation, grid_params, args.outpath)
+            "lr": [ 5e-4, 1e-4 ],
+            "batch_size": [ 1024, 4096, 6000 ],
+            "module__sigma": [ 0, .25, .5 ],
+            "module__input_size": [ input_size ],
+            "module__rnn_size": [ 64, 128 ],
+            "module__rnn_layers": [ 1, 3 ],
+            "module__latent_size": [ 64, 128 ]})
+        grid_search(training, validation, validation_attacks, grid_params, args.outpath)
     else:
         ts2vec, res = ts2vec_cicids2017(training, validation, validation_attacks, args.outpath)
         print("Terminating, saving the model")

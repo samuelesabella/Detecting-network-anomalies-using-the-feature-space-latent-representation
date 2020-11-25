@@ -18,16 +18,13 @@ import torch.nn.functional as F
 
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
 
 # ----- ----- CONSTANTS ----- ----- #
 # ----- ----- --------- ----- ----- #
 NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
-
-CONTEXT_LEN = 80 # context window length, 28 minutes with 4spm (sample per minutes) 
-ACTIVITY_LEN = 40 # activity window length, 14 minutes 
 
 # Triplet margins
 BETA_1 = .01
@@ -44,21 +41,22 @@ def dfwindowed(df, wlen, step):
     return wnds_values
 
 
-def ts_windowing(df, overlapping=.95):
+def ts_windowing(df, overlapping=.95, context_len=80):
     """
     overlapping -- context windowing overlapping
     consistency_range  --  activity within this range are considered consistent
     """
+    activity_len = int(context_len / 2)
     samples = defaultdict(list)
-    window_stepsize = max(int(CONTEXT_LEN * (1 - overlapping)), 1) 
+    window_stepsize = max(int(context_len * (1 - overlapping)), 1) 
 
     logging.debug("Windowing time series for each host")
     host_ts = df.groupby(level=['device_category', 'host'])
     for (device_category, host), ts in tqdm(host_ts):
         # Building context/activity windows ..... #
-        windows = dfwindowed(ts, CONTEXT_LEN, window_stepsize)
+        windows = dfwindowed(ts, context_len, window_stepsize)
         for context in windows:
-            attack_perc = len(context[context["isanomaly"] != "none"]) / CONTEXT_LEN
+            attack_perc = len(context[context["isanomaly"] != "none"]) / context_len
             # if 0 < attack_perc < .25 or attack_perc > .75:
             #     continue
             isanomaly = NORMAL_TRAFFIC if attack_perc == .0 else ATTACK_TRAFFIC
@@ -251,12 +249,17 @@ class Ts2VecScore():
 # ----- ----- MODELS ----- ----- #
 # ----- ----- ------ ----- ----- #
 class AnchorTs2Vec(torch.nn.Module):
+    def __init__(self, sigma=.0):
+        super(AnchorTs2Vec, self).__init__()
+        self.sigma = sigma
+
     def toembedding(self, x):
         raise NotImplementedError()
 
     def context_anomaly(self, ctx):
-        a1 = ctx[:, :ACTIVITY_LEN]
-        a2 = ctx[:, ACTIVITY_LEN:]
+        activity_len = int(ctx.shape[1] / 2)
+        a1 = ctx[:, :activity_len]
+        a2 = ctx[:, activity_len:]
         return self.activity_coherency(a1, a2)
 
     def activity_coherency(self, a1, a2):
@@ -265,16 +268,14 @@ class AnchorTs2Vec(torch.nn.Module):
         e_a2 = self.toembedding(a2)
 
         dist = (torch.norm(e_a1 - e_a2, p=2, dim=1) - BETA_1) / BETA_2
-        dist += .25
+        dist += self.sigma
         return torch.clamp(dist, 0., 1.)
 
     def forward(self, context=None, device_category=None, start_time=None, end_time=None, host=None):
-        # actv = context[:, :ACTIVITY_LEN]
-        # e_actv = self.toembedding(actv) 
-        # ap = context[:, ACTIVITY_LEN:] 
-        # e_ap = self.toembedding(ap)
-        r = random.randint(0, CONTEXT_LEN-ACTIVITY_LEN)
-        actv = context[:, r:r+ACTIVITY_LEN]
+        context_len = context.shape[1]
+        activity_len = int(context_len / 2)
+        r = random.randint(0, context_len - activity_len)
+        actv = context[:, r:r + activity_len]
         ap = context
         e_ap = self.toembedding(ap)
         e_actv = self.toembedding(actv)
@@ -285,18 +286,17 @@ class AnchorTs2Vec(torch.nn.Module):
 
 
 class STC(AnchorTs2Vec):
-    def __init__(self):
-        super(STC, self).__init__() 
-        self.rnn = nn.GRU(input_size=19, hidden_size=64, num_layers=1, batch_first=True)
+    def __init__(self, input_size=None, sigma=.0, rnn_size=64, rnn_layers=64, latent_size=64):
+        super(STC, self).__init__(sigma)
+        self.rnn = nn.GRU(input_size=input_size, hidden_size=rnn_size, num_layers=rnn_layers, batch_first=True)
         self.embedder = nn.Sequential(
-            nn.Linear(64, 64),
+            nn.Linear(rnn_size, latent_size),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(latent_size, latent_size),
             nn.ReLU())
 
     def toembedding(self, x):
         rnn_out, _ = self.rnn(x)
         e = self.embedder(rnn_out[:, -1])
-        # e = F.normalize(e, p=2, dim=1)
         return e
 
