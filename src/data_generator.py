@@ -72,7 +72,7 @@ class Preprocessor():
             df[tc] = self.discretizer.transform(values)
         return df
 
-    def preprocessing(self, df, fit=False):
+    def preprocessing(self, df):
         smart_features = set(ntopng_c.FEATURE_LEVELS[self.flevel])
         available_features = set(df.columns)
         available_cols = available_features.intersection(smart_features)

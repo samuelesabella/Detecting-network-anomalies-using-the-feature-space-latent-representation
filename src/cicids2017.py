@@ -37,8 +37,9 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PATIENCE = 7
 MAX_EPOCHS = 2
 
-WINDOW_OVERLAPPING = .45
+WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
+DISCRETIZED = True
 CONTEXT_LEN = 80 # context window length, 28 minutes with 4spm (sample per minutes) 
 ACTIVITY_LEN = 40 # activity window length, 14 minutes 
 
@@ -135,10 +136,11 @@ class Cicids2017Preprocessor(generator.Preprocessor):
         days_df = []
         days = np.unique(df.index.get_level_values("_time").day)
         for d in days:
-            d = df[df.index.get_level_values("_time").day == d]
-            d = super().preprocessing(df, fit=False)
-            days_df.append(d)
+            daily_df = df[df.index.get_level_values("_time").day == d]
+            daily_df_preproc = super().preprocessing(daily_df)
+            days_df.append(daily_df_preproc)
         preproc_df = pd.concat(days_df)
+
         if self.compute_discrtz: 
             preproc_df = self.discretize(preproc_df, fit)
     
@@ -191,6 +193,7 @@ def history2dframe(net, labels=None):
     s["ctx_overlapping"] = WINDOW_OVERLAPPING
     s["features"] = FLEVEL
     s["ctx_len"] = CONTEXT_LEN
+    s["discretized"] = DISCRETIZED
 
     return s.infer_objects()
 
@@ -259,7 +262,6 @@ def grid_search(train, validation, validation_attacks, grid_params, outpath):
     # Grid search ..... #
     logging.debug("Starting grid search")
     grid_pbar = tqdm(grid_params)
-    import pdb; pdb.set_trace() 
     for params in grid_pbar:  
         grid_pbar.set_description(str(params))
         net = NeuralNet(cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam,
@@ -272,7 +274,7 @@ def grid_search(train, validation, validation_attacks, grid_params, outpath):
         grid_res = pd.concat([grid_res, history2dframe(net, params)], ignore_index=True)    
 
         # Get best configuration ..... #
-        fname = f"gridSearch__features_{FLEVEL}__overlapping_{WINDOW_OVERLAPPING}__ctxlen_{CONTEXT_LEN}.pkl"
+        fname = f"gridSearch__features_{FLEVEL}__overlapping_{WINDOW_OVERLAPPING}__ctxlen_{CONTEXT_LEN}__discretized_{DISCRETIZED}.pkl"
         grid_res.to_pickle(outpath / fname)
 
 
@@ -304,7 +306,7 @@ def trainsplit(dd, ts_perc):
     return tr, ts
 
 def prepare_dataset(df):
-    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=False)
+    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=DISCRETIZED)
     
     validation_day = 3 # Monday
     week_mask = df.index.get_level_values("_time").day != validation_day
