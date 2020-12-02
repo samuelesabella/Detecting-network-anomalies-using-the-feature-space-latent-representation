@@ -35,7 +35,7 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PATIENCE = 7
-MAX_EPOCHS = 2
+MAX_EPOCHS = 250
 
 WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
@@ -202,10 +202,20 @@ def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
     dist_plot = cb.DistPlot(outpath)
     loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
     rec_prec_plot = cb.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
+
+    model_args = {
+        "module__sigma": .25,
+        "module__input_size": 19,
+        "module__rnn_size": 64,
+        "module__rnn_layers": 1,
+        "module__latent_size": 64
+    }
+
     net = NeuralNet(
         cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
         iterator_train__shuffle=True,
         lr=1e-4, batch_size=6090, max_epochs=125,
+        **model_args,
         device=DEVICE, verbose=1, train_split=None,
         callbacks=[
             # *cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
@@ -229,7 +239,7 @@ def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
     report = classification_report(y, y_hat)
     metrics_rep = [ metrics.roc_auc_score,
                     metrics.precision_score, metrics.recall_score,
-                metrics.accuracy_score, metrics.f1_score]
+                    metrics.accuracy_score, metrics.f1_score]
     for m in metrics_rep:
         mres = m(y, y_hat)
         print(f"{m.__name__}(moday+attacks): {mres}")
@@ -304,6 +314,51 @@ def trainsplit(dd, ts_perc):
         tr[k] = dd[k][tr_idxs]
         ts[k] = dd[k][ts_idxs]
     return tr, ts
+
+
+def prepare_dataset_exclude_server(df):
+    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=DISCRETIZED)
+    
+    validation_day = 3 # Monday
+    week_mask = df.index.get_level_values("_time").day != validation_day
+    tserver_mask = df.index.get_level_values("host") != "192.168.10.50"
+    
+    df_training = df[week_mask & tserver_mask]
+    df_training = pr.preprocessing(df_training, fit=True)
+    
+    df_validation = df[np.bitwise_not(week_mask) & tserver_mask]
+    df_validation = pr.preprocessing(df_validation)
+    
+    # validation/test ..... #
+    training_windows = defaultdict(list)
+    for d in [4, 5, 6, 7]:
+        day_df = df_training[df_training.index.get_level_values("_time").day == d]
+        day_windows = cb.ts_windowing(day_df, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
+        
+        for k, v in day_windows.items():
+            training_windows[k].append(v)
+    
+    # Training: all week, Validation: monday
+    training = { k: np.concatenate(v) for k, v in training_windows.items() }
+    normal_training_mask = np.where(training["isanomaly"] == False)[0]
+    training = { k: x[normal_training_mask] for k, x in training.items() }
+    
+    validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
+    normal_validation_mask = np.where(validation["isanomaly"] == False)[0]
+    validation = { k: x[normal_validation_mask] for k, x in validation.items() }
+    
+    validation, testing = trainsplit(validation, .33)
+    
+    # Validation attacks: monday + week attacks
+    validation_attacks = df[np.bitwise_not(tserver_mask)]
+    validation_attacks = pr.preprocessing(validation_attacks)
+    validation_attacks = cb.ts_windowing(validation_attacks, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
+    validation_attacks, testing_attacks = trainsplit(validation_attacks, .33)
+    
+    datasets = { "training": training, "validation": validation, "testing": testing,
+                 "validation_attacks": validation_attacks, "testing_attacks": testing_attacks }
+    return datasets
+
 
 def prepare_dataset(df):
     pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=DISCRETIZED)
