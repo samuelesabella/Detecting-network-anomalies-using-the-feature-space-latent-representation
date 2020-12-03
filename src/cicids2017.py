@@ -261,18 +261,19 @@ def setparams(net, params):
 def grid_search(train, validation, validation_attacks, grid_params, outpath):
     grid_res = pd.DataFrame()
 
-    callbacks=[
-        cb.Ts2VecScore(skmetrics.accuracy_score, data=validation_attacks).epoch_score(on_train=False),
-        cb.Ts2VecScore(skmetrics.f1_score, data=validation_attacks).epoch_score(on_train=False),
-        cb.Ts2VecScore(skmetrics.recall_score, data=validation_attacks).epoch_score(on_train=False),
-        cb.Ts2VecScore(skmetrics.precision_score, data=validation_attacks).epoch_score(on_train=False),
-        cb.Ts2VecScore(skmetrics.roc_auc_score, data=validation_attacks).epoch_score(on_train=False),
-        EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=PATIENCE)]
-
     # Grid search ..... #
     logging.debug("Starting grid search")
     grid_pbar = tqdm(grid_params)
     for params in grid_pbar:  
+        callbacks=[
+            cb.Ts2VecScore(skmetrics.accuracy_score, data=validation_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.f1_score, data=validation_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.recall_score, data=validation_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.precision_score, data=validation_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.roc_auc_score, data=validation_attacks).epoch_score(on_train=False),
+
+        EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=PATIENCE)]
+
         grid_pbar.set_description(str(params))
         net = NeuralNet(cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam,
                         **params,  max_epochs=MAX_EPOCHS,
