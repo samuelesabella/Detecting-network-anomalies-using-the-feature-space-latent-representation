@@ -1,25 +1,28 @@
 from collections import defaultdict
+from pathlib import Path
 from sklearn import metrics
 from sklearn.metrics import classification_report
-import os
-import math
-from sklearn.model_selection import train_test_split
-from pathlib import Path
+from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import KFold
 from sklearn.model_selection import ParameterGrid
+from sklearn.model_selection import train_test_split
 from skorch.callbacks import EarlyStopping
+from skorch.dataset import CVSplit
 from skorch.dataset import Dataset
+from skorch.helper import SliceDataset
 from skorch.helper import predefined_split
 from skorch.net import NeuralNet
 from tqdm import tqdm
+import _pickle as cPickle
 import argparse
 import data_generator as generator
-from datetime import datetime
-import logging
 import gzip
-import _pickle as cPickle
+import itertools
+import logging
+import math
 import model_codebase as cb
 import numpy as np
+import os
 import pandas as pd
 import random
 import sklearn.metrics as skmetrics 
@@ -34,7 +37,7 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-PATIENCE = 7
+PATIENCE = 15
 MAX_EPOCHS = 250
 
 WINDOW_OVERLAPPING = .95
@@ -181,6 +184,7 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
 def history2dframe(net, labels=None):
+    import pdb; pdb.set_trace() 
     ignore_keys = [ "batches", "train_batch_count", "valid_batch_count" ]
     best_epoch = next(x for x in reversed(net.history) if x["valid_loss_best"])
     if labels:
@@ -198,11 +202,9 @@ def history2dframe(net, labels=None):
     return s.infer_objects()
 
 
-def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
-    dist_plot = cb.DistPlot(outpath)
-    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
-    rec_prec_plot = cb.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
-
+def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
+    batch_size = 6000
+    lr = 1e-4
     model_args = {
         "module__sigma": .25,
         "module__input_size": 19,
@@ -211,39 +213,47 @@ def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
         "module__latent_size": 64
     }
 
+    dist_plot = cb.DistPlot(outpath)
+    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
+    rec_prec_plot = cb.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
+
     net = NeuralNet(
         cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
-        iterator_train__shuffle=True,
-        lr=1e-4, batch_size=6090, max_epochs=125,
+        iterator_train__shuffle=False,
+        lr=lr, batch_size=batch_size, max_epochs=MAX_EPOCHS,
         **model_args,
-        device=DEVICE, verbose=1, train_split=None,
+        device=DEVICE, verbose=1,
+        train_split=CVSplit(5, random_state=SEED),
         callbacks=[
-            # *cb.Ts2VecScore(skmetrics.accuracy_score).epoch_score(),
-            cb.Ts2VecScore(skmetrics.recall_score, data=validation_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.precision_score, data=validation_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.roc_auc_score, data=validation_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.recall_score, data=testing_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.precision_score, data=testing_attacks).epoch_score(on_train=False),
+            cb.Ts2VecScore(skmetrics.roc_auc_score, data=testing_attacks).epoch_score(on_train=False),
             dist_plot, loss_plot, rec_prec_plot,
-            EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=PATIENCE)
-            # EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
         ])    
 
     # Retrain on whole dataset ..... #
-    net.train_split = predefined_split(validation)
     net.fit(train)
 
+    # Test Loss ..... #
+    loss_ts = cb.Contextual_Coherency()(net.forward(testing.X))
+    print(f"Testing loss: {loss_ts}")
+
     # Detection capabilities ..... #
-    y = validation_attacks.y.cpu()
-    y_hat = net.module_.context_anomaly(validation_attacks.X["context"]).detach()
+    X_attacks = testing_attacks.X["context"]
+    y_attacks = testing_attacks.y.cpu()
+    y_hat = net.module_.context_anomaly(X_attacks).detach()
     y_hat = np.round(y_hat.cpu())
     
-    report = classification_report(y, y_hat)
+    report = classification_report(y_attacks, y_hat)
     metrics_rep = [ metrics.roc_auc_score,
                     metrics.precision_score, metrics.recall_score,
                     metrics.accuracy_score, metrics.f1_score]
     for m in metrics_rep:
-        mres = m(y, y_hat)
+        mres = m(y_attacks, y_hat)
         print(f"{m.__name__}(moday+attacks): {mres}")
-    tn, fp, fn, tp = metrics.confusion_matrix(y, y_hat, normalize="all").ravel()
+
+    tn, fp, fn, tp = metrics.confusion_matrix(y_attacks, y_hat, normalize="all").ravel()
     print("\n Confusion matrix")
     print(f"\ttp: {tp} \tfp: {fp} \n\tfn: {fn} \ttn: {tn}")
     print(f"\n{report}")
@@ -253,86 +263,45 @@ def ts2vec_cicids2017(train, validation, validation_attacks, outpath):
 
 # ----- ----- GRID SEARCH ----- ----- #
 # ----- ----- ----------- ----- ----- #
-def setparams(net, params):
-    for k, v in params.items():
-        setattr(net, k, v)
+def grid_search(train, grid_params, outpath):
+    net = NeuralNet(cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam,
+                    max_epochs=MAX_EPOCHS,
+                    device=DEVICE, iterator_train__shuffle=False, 
+                    callbacks=[ EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE) ],
+                    train_split=CVSplit(5, random_state=SEED),
+                    verbose=1)
+    kf = KFold(n_splits=5, shuffle=False, random_state=SEED)
+    gs = GridSearchCV(net, grid_params, cv=kf, refit=True, scoring=cb.Contextual_Coherency.as_score)
+    grid_res = gs.fit(SliceDataset(train))
 
-
-def grid_search(train, validation, validation_attacks, grid_params, outpath):
-    grid_res = pd.DataFrame()
-
-    # Grid search ..... #
-    logging.debug("Starting grid search")
-    grid_pbar = tqdm(grid_params)
-    for params in grid_pbar:  
-        callbacks=[
-            cb.Ts2VecScore(skmetrics.accuracy_score, data=validation_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.f1_score, data=validation_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.recall_score, data=validation_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.precision_score, data=validation_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.roc_auc_score, data=validation_attacks).epoch_score(on_train=False),
-
-        EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=PATIENCE)]
-
-        grid_pbar.set_description(str(params))
-        net = NeuralNet(cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam,
-                        **params,  max_epochs=MAX_EPOCHS,
-                        device=DEVICE, iterator_train__shuffle=True, callbacks=callbacks,
-                        verbose=1, train_split=None)
-
-        net.train_split = predefined_split(validation) 
-        net.fit(train)
-        grid_res = pd.concat([grid_res, history2dframe(net, params)], ignore_index=True)    
-
-        # Get best configuration ..... #
-        fname = f"gridSearch__features_{FLEVEL}__overlapping_{WINDOW_OVERLAPPING}__ctxlen_{CONTEXT_LEN}__discretized_{DISCRETIZED}.pkl"
-        grid_res.to_pickle(outpath / fname)
+    grid_search_df = pd.DataFrame(grid_res.cv_results_)
+    # Get best configuration ..... #
+    fname = f"gridSearch__features_{FLEVEL}__overlapping_{WINDOW_OVERLAPPING}__ctxlen_{CONTEXT_LEN}__discretized_{DISCRETIZED}.pkl"
+    grid_search_df.to_pickle(outpath / fname)
 
 
 # ----- ----- MAIN ----- ----- #
 # ----- ----- ---- ----- ----- #
-def split2dataset(split):
-    Xlist, y = zip(*split)
-    y = torch.stack(y)
-    
-    X = {}
-    for k in Xlist[0].keys():
-        v = [x[k] for x in Xlist]
-        X[k] = torch.stack(v) if torch.is_tensor(v[0]) else torch.Tensor(v)
+def alternate_merge(ll):
+    return list(itertools.chain(*zip(*ll)))
 
-    return Dataset(X, y)
-    
-def trainsplit(dd, ts_perc):
-    ddkeys = list(dd.keys())
-    n = len(dd[ddkeys[0]])
-    idxs = np.random.permutation(range(n))
-    tr_size = math.floor(n * (1-ts_perc))
-    tr_idxs = idxs[:tr_size]
-    ts_idxs = idxs[tr_size:]
-    tr, ts = {}, {}
-
-    for k in ddkeys:
-        tr[k] = dd[k][tr_idxs]
-        ts[k] = dd[k][ts_idxs]
-    return tr, ts
-
-
-def prepare_dataset_exclude_server(df):
+def prepare_dataset(df):
     pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=DISCRETIZED)
     
-    validation_day = 3 # Monday
-    week_mask = df.index.get_level_values("_time").day != validation_day
+    monday = 3
+    week_days = [4, 5, 6, 7]
+    week_mask = df.index.get_level_values("_time").day != monday
     tserver_mask = df.index.get_level_values("host") != "192.168.10.50"
     
     df_training = df[week_mask & tserver_mask]
     df_training = pr.preprocessing(df_training, fit=True)
     
-    df_validation = df[np.bitwise_not(week_mask) & tserver_mask]
-    df_validation = pr.preprocessing(df_validation)
+    df_testing = df[np.bitwise_not(week_mask) & tserver_mask]
+    df_testing = pr.preprocessing(df_testing)
     
-    # validation/test ..... #
+    # testing/test ..... #
     training_windows = defaultdict(list)
-    for d in [4, 5, 6, 7]:
+    for d in week_days:
         day_df = df_training[df_training.index.get_level_values("_time").day == d]
         day_windows = cb.ts_windowing(day_df, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
         
@@ -340,72 +309,22 @@ def prepare_dataset_exclude_server(df):
             training_windows[k].append(v)
     
     # Training: all week, Validation: monday
-    training = { k: np.concatenate(v) for k, v in training_windows.items() }
+    training = { k: np.array(alternate_merge(v)) for k, v in training_windows.items() }
+    # training = { k: np.concatenate(v) for k, v in training_windows.items() }
     normal_training_mask = np.where(training["isanomaly"] == False)[0]
     training = { k: x[normal_training_mask] for k, x in training.items() }
     
-    validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
-    normal_validation_mask = np.where(validation["isanomaly"] == False)[0]
-    validation = { k: x[normal_validation_mask] for k, x in validation.items() }
-    
-    validation, testing = trainsplit(validation, .33)
+    testing = cb.ts_windowing(df_testing, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
+    normal_testing_mask = np.where(testing["isanomaly"] == False)[0]
+    testing = { k: x[normal_testing_mask] for k, x in testing.items() }
     
     # Validation attacks: monday + week attacks
-    validation_attacks = df[np.bitwise_not(tserver_mask)]
-    validation_attacks = pr.preprocessing(validation_attacks)
-    validation_attacks = cb.ts_windowing(validation_attacks, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
-    validation_attacks, testing_attacks = trainsplit(validation_attacks, .33)
+    testing_attacks = df[np.bitwise_not(tserver_mask)]
+    testing_attacks = pr.preprocessing(testing_attacks)
+    testing_attacks = cb.ts_windowing(testing_attacks, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
     
-    datasets = { "training": training, "validation": validation, "testing": testing,
-                 "validation_attacks": validation_attacks, "testing_attacks": testing_attacks }
-    return datasets
-
-
-def prepare_dataset(df):
-    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=DISCRETIZED)
-    
-    validation_day = 3 # Monday
-    week_mask = df.index.get_level_values("_time").day != validation_day
-    
-    df_training = df[week_mask]
-    df_training = pr.preprocessing(df_training, fit=True)
-    
-    df_validation = df[np.bitwise_not(week_mask)]
-    df_validation = pr.preprocessing(df_validation)
- 
-    # validation/test ..... #
-    training_windows = defaultdict(list)
-    for d in [4, 5, 6, 7]:
-        day_df = df_training[df_training.index.get_level_values("_time").day == d]
-        day_windows = cb.ts_windowing(day_df, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
-
-        for k, v in day_windows.items():
-            training_windows[k].append(v)
-
-    # Training: all week, Validation: monday
-    training = { k: np.concatenate(v) for k, v in training_windows.items() }
-    validation = cb.ts_windowing(df_validation, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
-
-    # Validation attacks: monday + week attacks 
-    attacks_training_mask = np.where(training["isanomaly"] == True)[0]
-    validation_attacks = { k: np.concatenate([v, training[k][attacks_training_mask]]) for k, v in validation.items() }
-    
-    # Training: all week (normal traffic only)
-    normal_training_mask = np.where(training["isanomaly"] == False)[0]
-    training = { k: x[normal_training_mask] for k, x in training.items() }
-
-    # validation, testing = trainsplit(validation, .33)
-    validation_attacks, testing_attacks = trainsplit(validation_attacks, .33) 
-
-    # Validation and testing: monday only (no attacks)
-    normal_validation_mask = np.where(validation_attacks["isanomaly"] == False)[0]
-    validation = { k: x[normal_validation_mask] for k, x in validation_attacks.items() }
-
-    normal_testing_mask = np.where(testing_attacks["isanomaly"] == False)[0]
-    testing = { k: x[normal_testing_mask] for k, x in testing_attacks.items() }
-
-    datasets = { "training": training, "validation": validation, "testing": testing, 
-                 "validation_attacks": validation_attacks, "testing_attacks": testing_attacks }
+    datasets = { "training": training, "testing": testing,
+                 "testing_attacks": testing_attacks }
     return datasets
 
 
@@ -453,35 +372,35 @@ if __name__ == "__main__":
         store_dataset(dataset_cache, datasets) 
 
     training = datasets["training"] 
-    validation = datasets["validation"]; validation_attacks = datasets["validation_attacks"]
+    testing = datasets["testing"]; 
+    testing_attacks = datasets["testing_attacks"]
     input_size = training["context"].shape[-1]
 
     train_len = len(training["isanomaly"])
     print(f"training (week normal): {train_len} samples")
-    val_len = len(validation["isanomaly"])
-    print(f"validation (monday only): {val_len} samples")
-    val_att_len = len(validation_attacks['isanomaly'])
-    val_att_perc = np.unique(validation_attacks["isanomaly"], return_counts=True)[1] / val_att_len
-    print(f"validation_attacks (monday+attacks): {val_att_len} samples, normal/attacks percentage: {val_att_perc}")
+    val_len = len(testing["isanomaly"])
+    print(f"testing (monday only): {val_len} samples")
+    val_att_len = len(testing_attacks['isanomaly'])
+    val_att_perc = np.unique(testing_attacks["isanomaly"], return_counts=True)[1] / val_att_len
+    print(f"testing_attacks (192.168.10.50): {val_att_len} samples, normal/attacks percentage: {val_att_perc}")
 
     training = Dataset(*cb.dataset2tensors(training))
     Dataset2GPU(training)
-    validation = Dataset(*cb.dataset2tensors(validation))
-    Dataset2GPU(validation)
-    validation_attacks = Dataset(*cb.dataset2tensors(validation_attacks))
-    Dataset2GPU(validation_attacks)
+    testing = Dataset(*cb.dataset2tensors(testing))
+    Dataset2GPU(testing)
+    testing_attacks = Dataset(*cb.dataset2tensors(testing_attacks))
+    Dataset2GPU(testing_attacks)
 
     if args.grid: 
-        grid_params = ParameterGrid({
+        grid_params = {
             "lr": [ 5e-4, 1e-4 ],
             "batch_size": [ 1024, 4096, 6000 ],
-            "module__sigma": [ 0, .25, .5 ],
             "module__input_size": [ input_size ],
-            "module__rnn_size": [ 64, 128 ],
+            "module__rnn_size": [ 32, 64, 128 ],
             "module__rnn_layers": [ 1, 3 ],
-            "module__latent_size": [ 64, 128 ]})
-        grid_search(training, validation, validation_attacks, grid_params, args.outpath)
+            "module__latent_size": [ 32, 64, 128 ]}
+        grid_search(training, grid_params, args.outpath)
     else:
-        ts2vec, res = ts2vec_cicids2017(training, validation, validation_attacks, args.outpath)
+        ts2vec, res = ts2vec_cicids2017(training, testing, testing_attacks, args.outpath)
         print("Terminating, saving the model")
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")

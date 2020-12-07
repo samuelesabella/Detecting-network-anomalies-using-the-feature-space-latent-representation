@@ -1,17 +1,16 @@
 from collections import defaultdict
-import random
 from scipy.stats import truncnorm
-from skorch.callbacks import EpochScoring
 from sklearn import preprocessing
-from tqdm import tqdm
-import sys
-# from umap import UMAP
 from sklearn.manifold import TSNE
+from skorch.callbacks import EpochScoring
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 import more_itertools as mit
 import numpy as np
 import pandas as pd
+import random
 import skorch
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,8 +56,8 @@ def ts_windowing(df, overlapping=.95, context_len=80):
         windows = dfwindowed(ts, context_len, window_stepsize)
         for context in windows:
             attack_perc = len(context[context["isanomaly"] != "none"]) / context_len
-            # if 0 < attack_perc < .25 or attack_perc > .75:
-            #     continue
+            if 0 < attack_perc < .25 or attack_perc > .75:
+                continue
             isanomaly = NORMAL_TRAFFIC if attack_perc == .0 else ATTACK_TRAFFIC
             samples["isanomaly"].append(isanomaly)
 
@@ -91,6 +90,14 @@ def dataset2tensors(dataset):
 # ----- ----- LOSSES ----- ----- #
 # ----- ----- ------ ----- ----- #
 class Contextual_Coherency():
+    @staticmethod
+    def as_score(net, X):
+        with torch.no_grad():
+            e_actv, e_ap, e_an = net.forward(X)
+        ap_dist = F.relu(torch.norm((e_actv - e_ap), p=2, dim=1) - BETA_1)
+        an_dist = F.relu(BETA_2 - torch.norm((e_actv - e_an), p=2, dim=1))
+        return torch.mean(ap_dist + an_dist)
+
     def __call__(self, model_out, labels):
         e_actv, e_ap, e_an = model_out 
         ap_dist = F.relu(torch.norm((e_actv - e_ap), p=2, dim=1) - BETA_1)
@@ -210,8 +217,10 @@ class DistPlot(skorch.callbacks.Callback):
         plot_dict(to_plot, fname)
 
     def on_epoch_end(self, net, dataset_train=None, dataset_valid=None):
-        self.plot_dist(net, dataset_train.X, "train")
-        self.plot_dist(net, dataset_valid.X, "valid")
+        X_tr, _ = skorch.utils.data_from_dataset(dataset_train)
+        X_vl, _ = skorch.utils.data_from_dataset(dataset_valid)
+        self.plot_dist(net, X_tr, "train")
+        self.plot_dist(net, X_vl, "valid")
 
 
 class Ts2VecScore():
