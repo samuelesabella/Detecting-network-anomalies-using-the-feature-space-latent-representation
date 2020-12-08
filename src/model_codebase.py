@@ -98,7 +98,7 @@ class Contextual_Coherency():
         an_dist = F.relu(BETA_2 - torch.norm((e_actv - e_an), p=2, dim=1))
         return torch.mean(ap_dist + an_dist)
 
-    def __call__(self, model_out, labels):
+    def __call__(self, model_out, _=None):
         e_actv, e_ap, e_an = model_out 
         ap_dist = F.relu(torch.norm((e_actv - e_ap), p=2, dim=1) - BETA_1)
         an_dist = F.relu(BETA_2 - torch.norm((e_actv - e_an), p=2, dim=1))
