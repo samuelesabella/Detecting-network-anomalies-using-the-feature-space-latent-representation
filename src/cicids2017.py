@@ -38,7 +38,7 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PATIENCE = 15
-MAX_EPOCHS = 250
+MAX_EPOCHS = 2
 
 WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
@@ -184,7 +184,6 @@ class CICIDS2017(generator.FluxDataGenerator):
 # ----- ----- EXPERIMENTS ----- ----- #
 # ----- ----- ----------- ----- ----- #
 def history2dframe(net, labels=None):
-    import pdb; pdb.set_trace() 
     ignore_keys = [ "batches", "train_batch_count", "valid_batch_count" ]
     best_epoch = next(x for x in reversed(net.history) if x["valid_loss_best"])
     if labels:
@@ -203,14 +202,14 @@ def history2dframe(net, labels=None):
 
 
 def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
-    batch_size = 6000
+    batch_size = 1024
     lr = 1e-4
     model_args = {
-        "module__sigma": .25,
+        "module__sigma": -.25,
         "module__input_size": 19,
-        "module__rnn_size": 64,
+        "module__rnn_size": 32,
         "module__rnn_layers": 1,
-        "module__latent_size": 64
+        "module__latent_size": 32
     }
 
     dist_plot = cb.DistPlot(outpath)
@@ -362,12 +361,12 @@ if __name__ == "__main__":
 
     # Data loading ..... # 
     dataset_files = ["training", "validation", "testing", "validation_attacks", "testing_attacks"]
-    timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
-    df = pd.read_pickle(timeseries_data)
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists() and not args.reset_data:
         datasets = load_dataset(dataset_cache)
     else:
+        timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
+        df = pd.read_pickle(timeseries_data)
         datasets = prepare_dataset(df)
         store_dataset(dataset_cache, datasets) 
 
