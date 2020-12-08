@@ -37,12 +37,12 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-PATIENCE = 15
+PATIENCE = 25
 MAX_EPOCHS = 250
 
 WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
-DISCRETIZED = True
+DISCRETIZED = False
 CONTEXT_LEN = 80 # context window length, 28 minutes with 4spm (sample per minutes) 
 ACTIVITY_LEN = 40 # activity window length, 14 minutes 
 
@@ -203,14 +203,14 @@ def history2dframe(net, labels=None):
 
 
 def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
-    batch_size = 6000
-    lr = 1e-4
+    batch_size = 1024
+    lr = 5e-4
     model_args = {
         "module__sigma": .25,
         "module__input_size": 19,
-        "module__rnn_size": 64,
+        "module__rnn_size": 32,
         "module__rnn_layers": 1,
-        "module__latent_size": 64
+        "module__latent_size": 32
     }
 
     dist_plot = cb.DistPlot(outpath)
@@ -269,9 +269,9 @@ def grid_search(train, grid_params, outpath):
                     device=DEVICE, iterator_train__shuffle=False, 
                     callbacks=[ EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE) ],
                     train_split=CVSplit(5, random_state=SEED),
-                    verbose=1)
+                    verbose=0)
     kf = KFold(n_splits=5, shuffle=False, random_state=SEED)
-    gs = GridSearchCV(net, grid_params, cv=kf, refit=True, scoring=cb.Contextual_Coherency.as_score)
+    gs = GridSearchCV(net, grid_params, cv=kf, refit=True, scoring=cb.Contextual_Coherency.as_score, verbose=10)
     grid_res = gs.fit(SliceDataset(train))
 
     grid_search_df = pd.DataFrame(grid_res.cv_results_)
@@ -394,11 +394,11 @@ if __name__ == "__main__":
     if args.grid: 
         grid_params = {
             "lr": [ 5e-4, 1e-4 ],
-            "batch_size": [ 1024, 4096, 6000 ],
+            "batch_size": [ 4096, 6000 ],
             "module__input_size": [ input_size ],
-            "module__rnn_size": [ 32, 64, 128 ],
+            "module__rnn_size": [ 64, 128 ],
             "module__rnn_layers": [ 1, 3 ],
-            "module__latent_size": [ 32, 64, 128 ]}
+            "module__latent_size": [ 64, 128 ]}
         grid_search(training, grid_params, args.outpath)
     else:
         ts2vec, res = ts2vec_cicids2017(training, testing, testing_attacks, args.outpath)
