@@ -203,14 +203,14 @@ def history2dframe(net, labels=None):
 
 
 def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
-    batch_size = 1024
+    batch_size = 4096
     lr = 5e-4
     model_args = {
         "module__sigma": .25,
         "module__input_size": 19,
-        "module__rnn_size": 32,
-        "module__rnn_layers": 1,
-        "module__latent_size": 32
+        "module__rnn_size": 128,
+        "module__rnn_layers": 3,
+        "module__latent_size": 128
     }
 
     dist_plot = cb.DistPlot(outpath)
@@ -229,7 +229,7 @@ def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
             cb.Ts2VecScore(skmetrics.precision_score, data=testing_attacks).epoch_score(on_train=False),
             cb.Ts2VecScore(skmetrics.roc_auc_score, data=testing_attacks).epoch_score(on_train=False),
             dist_plot, loss_plot, rec_prec_plot,
-            EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)
+            EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=7)
         ])    
 
     # Retrain on whole dataset ..... #
