@@ -3,9 +3,8 @@ import random
 import sys
 import torch
 import torch.nn as nn
-from skorch.net import NeuralNet
+from AnomalyDetector import ContextCriterion
 import torch.nn.functional as F
-from AnomalyDetector import WindowedAnomalyDetector, ContextCriterion
 
 
 BETA_1 = .01
@@ -60,13 +59,13 @@ def find_neg_anchors(e_actv, e_ap, discriminator):
 
 # ----- ----- MODEL DEFINITION ----- ----- #
 # ----- ----- ---------------- ----- ----- #
-class AnchorTs2Vec(WindowedAnomalyDetector):
-    def __init__(self, sigma=.0, **kwargs):
-        super(AnchorTs2Vec, self).__init__(**kwargs)
+class AnchorTs2Vec(torch.nn.Module):
+    def __init__(self, sigma=.0):
+        super(AnchorTs2Vec, self).__init__()
         self.sigma = sigma
 
     def context_anomaly(self, ctx):
-        activity_len = int(ctx.shape[1] / 2)
+        activity_len = int(ctx.size(1) / 2)
         a1 = ctx[:, :activity_len]
         a2 = ctx[:, activity_len:]
         return self.activity_coherency(a1, a2)

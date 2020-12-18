@@ -1,11 +1,7 @@
 import random
-from skorch.net import NeuralNet
-import skorch
-import sys
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from AnomalyDetector import WindowedAnomalyDetector, ContextCriterion
+from AnomalyDetector import ContextCriterion
 
 
 # ----- ----- LOSS FUNCTION ----- ----- #
@@ -19,9 +15,9 @@ class ReconstructionError(ContextCriterion):
 
 # ----- ----- MODELS ----- ----- #
 # ----- ----- ------ ----- ----- #
-class Seq2Seq(WindowedAnomalyDetector):
-    def __init__(self, input_size=None, latent_size=64, rnn_layers=64, teacher_forcing_ratio=1., **kwargs):
-        super(Seq2Seq, self).__init__(**kwargs)
+class Seq2Seq(torch.nn.Module):
+    def __init__(self, input_size=None, latent_size=64, rnn_layers=64, teacher_forcing_ratio=1.):
+        super(Seq2Seq, self).__init__()
         self.teacher_forcing_ratio = teacher_forcing_ratio
         self.hidden_size = latent_size
 

@@ -1,7 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
-from sklearn import metrics
-from sklearn.metrics import classification_report
+import sklearn.metrics as skmetrics
 from sklearn.model_selection import GridSearchCV, KFold
 from skorch.callbacks import EarlyStopping
 from skorch.dataset import CVSplit
@@ -30,8 +29,7 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-if DEVICE=="cuda":
-    torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.DoubleTensor)
 
 PATIENCE = 25
 MAX_EPOCHS = 2
@@ -39,7 +37,7 @@ MAX_EPOCHS = 2
 WINDOW_OVERLAPPING = .45
 FLEVEL = "MAGIK"
 DISCRETIZED = False
-CONTEXT_LEN = 20 # context window length, 20 minutes with 4spm (sample per minutes) 
+CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -241,7 +239,7 @@ def history2dframe(net, labels=None):
     return s.infer_objects()
 
 
-def configureAnchor(testing_attacks):
+def configureAnchor(outpath, dt, checkpoint: Path = None):
     batch_size = 4096
     lr = 5e-4
     model_args = {
@@ -254,29 +252,31 @@ def configureAnchor(testing_attacks):
 
     dist_plot = Callbacks.DistPlot(outpath)
     loss_plot = Callbacks.EpochPlot(outpath, ["train_loss", "valid_loss"])
-    rec_prec_plot = Callbacks.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
+    rec_prec_plot = Callbacks.EpochPlot(outpath, ["DT_precision_score", "DT_recall_score"])
 
-    net = NeuralNet(
-        tripletloss.AnchorTs2Vec, tripletloss.ContextualCoherency, 
+    net = ad.WindowedAnomalyDetector(
+        tripletloss.GruLinear, tripletloss.ContextualCoherency, 
         optimizer=torch.optim.Adam, 
         iterator_train__shuffle=False,
         lr=lr, batch_size=batch_size, max_epochs=MAX_EPOCHS,
         **model_args,
         device=DEVICE, verbose=1,
         train_split=CVSplit(5, random_state=SEED),
-        callbacks=[
-            cb.Ts2VecScore(skmetrics.recall_score, data=testing_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.precision_score, data=testing_attacks).epoch_score(on_train=False),
-            cb.Ts2VecScore(skmetrics.roc_auc_score, data=testing_attacks).epoch_score(on_train=False),
-            dist_plot, loss_plot, rec_prec_plot,
-            EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=7)])    
+        callbacks=[ Callbacks.DetectionScore(skmetrics.recall_score, dt),
+                    Callbacks.DetectionScore(skmetrics.precision_score, dt),
+                    Callbacks.DetectionScore(skmetrics.roc_auc_score, dt),
+                    dist_plot, loss_plot, rec_prec_plot,
+                    EarlyStopping("DT_roc_auc_score", lower_is_better=False, patience=7)])    
+    if checkpoint is not None:
+        net.initialize_context(CONTEXT_LEN)
+        net.initialize()
+        state_dict = torch.load(str(checkpoint), map_location=torch.device("cpu"))
+        net.module_.load_state_dict(state_dict)
+
     return net
 
 
-def ts2vec_cicids2017(technique, train, testing, testing_attacks):
-    net = configureAnchor(testing_attacks)
-
-    # Retrain on whole dataset ..... #
+def ts2vec_cicids2017(net, train, testing, testing_attacks, outpath):
     net.fit(train)
 
     # Test Loss ..... #
@@ -284,23 +284,24 @@ def ts2vec_cicids2017(technique, train, testing, testing_attacks):
     # print(f"Testing loss: {loss_ts}")
 
     # Detection capabilities ..... #
-    X_attacks = testing_attacks.X["context"]
-    y_attacks = testing_attacks.y.cpu()
-    y_hat = net.module_.context_anomaly(X_attacks).detach()
-    y_hat = np.round(y_hat.cpu())
-    
-    report = classification_report(y_attacks, y_hat)
-    metrics_rep = [ metrics.roc_auc_score,
-                    metrics.precision_score, metrics.recall_score,
-                    metrics.accuracy_score, metrics.f1_score]
-    for m in metrics_rep:
-        mres = m(y_attacks, y_hat)
-        print(f"{m.__name__}(moday+attacks): {mres}")
+    # TODO: fix
+    # X_attacks = testing_attacks.X["context"]
+    # y_attacks = testing_attacks.y.cpu()
+    # y_hat = net.module_.context_anomaly(X_attacks).detach()
+    # y_hat = np.round(y_hat.cpu())
+    # 
+    # report = classification_report(y_attacks, y_hat)
+    # metrics_rep = [ skmetrics.roc_auc_score,
+    #                 skmetrics.precision_score, skmetrics.recall_score,
+    #                 skmetrics.accuracy_score,  skmetrics.f1_score]
+    # for m in metrics_rep:
+    #     mres = m(y_attacks, y_hat)
+    #     print(f"{m.__name__}(moday+attacks): {mres}")
 
-    tn, fp, fn, tp = metrics.confusion_matrix(y_attacks, y_hat, normalize="all").ravel()
-    print("\n Confusion matrix")
-    print(f"\ttp: {tp} \tfp: {fp} \n\tfn: {fn} \ttn: {tn}")
-    print(f"\n{report}")
+    # tn, fp, fn, tp = skmetrics.confusion_matrix(y_attacks, y_hat, normalize="all").ravel()
+    # print("\n Confusion matrix")
+    # print(f"\ttp: {tp} \tfp: {fp} \n\tfn: {fn} \ttn: {tn}")
+    # print(f"\n{report}")
     
     return net.module_, history2dframe(net)
 
@@ -395,6 +396,8 @@ if __name__ == "__main__":
             training.y = training.X["context"]
         grid_search(training, grid_params, module, loss, args.outpath)
     else:
-        ts2vec = ts2vec_cicids2017(training, testing, testing_attacks, args.outpath)
+        if args.technique=="TL":
+            net = configureAnchor(args.outpath, detection)
+        ts2vec = ts2vec_cicids2017(net, training, testing, detection, args.outpath)
         print("Terminating, saving the model")
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")

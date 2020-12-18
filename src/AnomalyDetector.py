@@ -3,12 +3,8 @@ import itertools
 from skorch.net import NeuralNet
 from skorch.dataset import Dataset
 import pandas as pd
-from scipy.stats import truncnorm
 from sklearn import preprocessing
-from sklearn.manifold import TSNE
-from skorch.callbacks import EpochScoring
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 import more_itertools as mit
 import numpy as np
 import skorch
@@ -18,8 +14,8 @@ import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
 
-NORMAL_TRAFFIC = np.array([ 0. ])
-ATTACK_TRAFFIC = np.array([ 1. ]) 
+NORMAL_TRAFFIC = 0.
+ATTACK_TRAFFIC = 1.
 
 
 class ContextCriterion():
@@ -82,9 +78,7 @@ class WindowedDataGenerator():
     def sk_dataset(self, context_dictionary):
         skdset = {}
         skdset["context"] = torch.Tensor(context_dictionary["context"])
-        # Host to id
         skdset["host"] = preprocessing.LabelEncoder().fit_transform(context_dictionary["host"])
-        # context_dictionary["_device_category"] = preprocessing.LabelEncoder().fit_transform(context_dictionary["_device_category"])
         an_perc = context_dictionary["anomaly_perc"]
         Y = np.where(an_perc==0, NORMAL_TRAFFIC, an_perc)
         Y = np.where(Y > 0, ATTACK_TRAFFIC, Y)
@@ -116,33 +110,64 @@ class WindowedDataGenerator():
         return model_input
 
 
-class WindowedAnomalyDetector(torch.nn.Module):
-    def __init__(self, wd: WindowedDataGenerator=None):
-        super(WindowedAnomalyDetector, self).__init__()
-        if wd is None:
-            print("WindowedDataGenerator not configured, anomaly detector not configured for pointwise prection")
-        else:
-            self.pointwise_ctxs = WindowedDataGenerator(1., wd.context_len)
-
-    def toembedding(self, x):
-        raise NotImplementedError()
+class WindowedAnomalyDetector(skorch.net.NeuralNet):
+    def __init__(self, *args, context_len=None, **kwargs):
+        self.pointwise_ctxs = None
+        if context_len is not None:
+            self.initialize_context(context_len)
+        super(WindowedAnomalyDetector, self).__init__(*args, **kwargs)
     
-    def context_anomaly(self, ctx):
-        raise NotImplementedError()
+    def initialize_context(self, context_len):
+        self.context_len = context_len
+        self.pointwise_ctxs = WindowedDataGenerator(1., context_len)
 
-    def pointwise_prediction(self, samples):
+    def fit(self, *args, **kwargs):
+        context_len = args[0].X["context"].size(1)
+        self.initialize_context(context_len)
+        super().fit(*args, **kwargs)
+
+    def pointwise_embedding(self, samples):
+        activity_len = int(self.context_len / 2)
+        extract_activity = (lambda ctx: self.module_.toembedding(ctx[:, :activity_len]))
+
+        return self.pointwise(samples, self.module_.toembedding, "_embedding", pad_with=np.nan)
+    
+    def pointwise_anomaly(self, samples, one_hot=False):
+        return self.pointwise(samples, self.module_.context_anomaly, "_y_hat")
+
+    def pointwise(self, samples, fun, label, pad_with=0.):
+        if self.pointwise_ctxs is None: 
+            raise AttributeError("Not fitted, missing context len") 
+
         if not isinstance(samples, list):
             samples = [samples]
 
+        activity_len = int(self.context_len / 2)
+        res = [ [] for i in range(len(samples)) ]
         channels = [c for c in samples[0].columns if c[0] != "_"]
-        for df in samples:
+        for i, df in enumerate(samples):
             host_ts = df.groupby(level=["_host"])
-            for _, host_df in tqdm(host_ts):
-                y_hat = []
+            for _, host_df in host_ts:
                 windows = self.pointwise_ctxs.dataframe_windows(host_df)
-                for context in windows:
-                    ctx = context[channels].values
-                    yi_hat = self.context_anomaly(ctx)
-                    y_hat.append(yi_hat)
-                host_df["y_hat"] = np.concat(y_hat)
+                ctx_batch = np.stack([ ctx[channels].values for ctx in windows ])
+
+                with torch.no_grad():
+                    pred = fun(torch.tensor(ctx_batch))
+
+                # Fix windowing padding with zeros (hope no anomaly)
+                if len(pred.shape) == 1:
+                    y_hat = np.full((len(host_df), 1), pad_with).squeeze()
+                    y_hat[activity_len:-activity_len+1] = pred.numpy()
+                else:
+                    y_hat = np.full((len(host_df), pred.size(1)), pad_with)
+                    y_hat[activity_len:-activity_len+1] = pred.numpy()
+                    y_hat = [ np.nan if np.isnan(x).any() else x for x in list(y_hat) ]
+                
+                host_df[label] = y_hat
+                res[i].append(host_df)
+            res[i] = pd.concat(res[i])
+
+        if not isinstance(samples, list):
+            return res[0]
+        return res
 
