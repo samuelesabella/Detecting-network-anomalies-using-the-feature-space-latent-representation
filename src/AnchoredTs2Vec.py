@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from skorch.net import NeuralNet
 import torch.nn.functional as F
+from AnomalyDetector import WindowedAnomalyDetector, ContextCriterion
 
 
 BETA_1 = .01
@@ -13,20 +14,12 @@ BETA_2 = .1
 
 # ----- ----- LOSS FUNCTION ----- ----- #
 # ----- ----- ------------- ----- ----- #
-class ContextualCoherency():
-    def score(self, model_out):
+class ContextualCoherency(ContextCriterion):
+    def score(self, model_out, _):
         e_actv, e_ap, e_an = model_out 
         ap_dist = F.relu(torch.norm((e_actv - e_ap), p=2, dim=1) - BETA_1)
         an_dist = F.relu(BETA_2 - torch.norm((e_actv - e_an), p=2, dim=1))
         return torch.mean(ap_dist + an_dist)
-
-    def __call__(self, p1, p2=None):
-        if isinstance(p1, NeuralNet): # p1=Model, p2=input
-            with torch.no_grad():
-                mout = p1.forward(p2)
-                return self.score(mout)
-        else: # p1=model_output
-            return self.score(p1) 
     
 
 # ----- ----- TUPLE MINING ----- ----- #
@@ -67,13 +60,10 @@ def find_neg_anchors(e_actv, e_ap, discriminator):
 
 # ----- ----- MODEL DEFINITION ----- ----- #
 # ----- ----- ---------------- ----- ----- #
-class AnchorTs2Vec(torch.nn.Module):
-    def __init__(self, sigma=.0):
-        super(AnchorTs2Vec, self).__init__()
+class AnchorTs2Vec(WindowedAnomalyDetector):
+    def __init__(self, sigma=.0, **kwargs):
+        super(AnchorTs2Vec, self).__init__(**kwargs)
         self.sigma = sigma
-
-    def toembedding(self, x):
-        raise NotImplementedError()
 
     def context_anomaly(self, ctx):
         activity_len = int(ctx.shape[1] / 2)
@@ -106,8 +96,8 @@ class AnchorTs2Vec(torch.nn.Module):
 
 
 class GruLinear(AnchorTs2Vec):
-    def __init__(self, input_size=None, sigma=.0, rnn_size=64, rnn_layers=64, latent_size=64):
-        super(GruLinear, self).__init__(sigma)
+    def __init__(self, input_size=None, rnn_size=64, rnn_layers=64, latent_size=64, **kwargs):
+        super(GruLinear, self).__init__(**kwargs)
         self.rnn = nn.GRU(input_size=input_size, hidden_size=rnn_size, num_layers=rnn_layers, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(rnn_size, latent_size),

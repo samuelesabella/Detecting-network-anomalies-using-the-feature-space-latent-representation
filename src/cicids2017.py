@@ -10,7 +10,7 @@ from skorch.net import NeuralNet
 import AnchoredTs2Vec as tripletloss
 import Callbacks
 import Seq2Seq as autoencoder
-import WindowedDataGenerator as inputgen
+import AnomalyDetector as ad
 import _pickle as cPickle
 import argparse
 import data_generator as generator
@@ -30,14 +30,16 @@ np.random.seed(SEED)
 
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-PATIENCE = 25
-MAX_EPOCHS = 175
+if DEVICE=="cuda":
+    torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.float64)
 
-WINDOW_OVERLAPPING = .95
+PATIENCE = 25
+MAX_EPOCHS = 2
+
+WINDOW_OVERLAPPING = .45
 FLEVEL = "MAGIK"
 DISCRETIZED = False
-CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
-ACTIVITY_LEN = 40 # activity window length, 10 minutes 
+CONTEXT_LEN = 20 # context window length, 20 minutes with 4spm (sample per minutes) 
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -239,7 +241,7 @@ def history2dframe(net, labels=None):
     return s.infer_objects()
 
 
-def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
+def configureAnchor(testing_attacks):
     batch_size = 4096
     lr = 5e-4
     model_args = {
@@ -255,7 +257,8 @@ def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
     rec_prec_plot = Callbacks.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
 
     net = NeuralNet(
-        cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
+        tripletloss.AnchorTs2Vec, tripletloss.ContextualCoherency, 
+        optimizer=torch.optim.Adam, 
         iterator_train__shuffle=False,
         lr=lr, batch_size=batch_size, max_epochs=MAX_EPOCHS,
         **model_args,
@@ -266,15 +269,19 @@ def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
             cb.Ts2VecScore(skmetrics.precision_score, data=testing_attacks).epoch_score(on_train=False),
             cb.Ts2VecScore(skmetrics.roc_auc_score, data=testing_attacks).epoch_score(on_train=False),
             dist_plot, loss_plot, rec_prec_plot,
-            EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=7)
-        ])    
+            EarlyStopping("valid_roc_auc_score", lower_is_better=False, patience=7)])    
+    return net
+
+
+def ts2vec_cicids2017(technique, train, testing, testing_attacks):
+    net = configureAnchor(testing_attacks)
 
     # Retrain on whole dataset ..... #
     net.fit(train)
 
     # Test Loss ..... #
-    loss_ts = cb.Contextual_Coherency()(net.forward(testing.X))
-    print(f"Testing loss: {loss_ts}")
+    # loss_ts = cb.Contextual_Coherency()(net.forward(testing.X))
+    # print(f"Testing loss: {loss_ts}")
 
     # Detection capabilities ..... #
     X_attacks = testing_attacks.X["context"]
@@ -305,7 +312,7 @@ def grid_search(train, grid_params, module, loss, outpath):
                     optimizer=torch.optim.Adam, max_epochs=MAX_EPOCHS,
                     device=DEVICE, iterator_train__shuffle=False, 
                     callbacks=[ EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE) ],
-                    train_split=CVSplit(5, random_state=SEED), verbose=0)
+                    train_split=CVSplit(5, random_state=SEED))#, verbose=0)
 
     kf = KFold(n_splits=5, shuffle=False, random_state=SEED)
     gs = GridSearchCV(net, grid_params, cv=kf, refit=True, scoring=loss(), verbose=10)
@@ -356,7 +363,7 @@ if __name__ == "__main__":
         datasets = cicids2017_partitions(df)
         store_dataset(dataset_cache, datasets) 
 
-    dg = inputgen.WindowedDataGenerator(WINDOW_OVERLAPPING, CONTEXT_LEN)
+    dg = ad.WindowedDataGenerator(WINDOW_OVERLAPPING, CONTEXT_LEN)
     training = dg(datasets["TR"])
     testing = dg([datasets["TS"]])
     detection = datasets["DT"]
@@ -380,7 +387,7 @@ if __name__ == "__main__":
                     "lr": [ 1e-2, 5e-3, 1e-3 ],
                     "batch_size": [ 32, 64, 128 ],
                     "module__input_size": [ input_size ],
-                    "module__rnn_layers": [ 1, 2 ]
+                    "module__rnn_layers": [ 1, 2 ],
                     "module__latent_size": [ 8, 32, 64 ] }
             module = autoencoder.Seq2Seq
             loss = autoencoder.ReconstructionError 

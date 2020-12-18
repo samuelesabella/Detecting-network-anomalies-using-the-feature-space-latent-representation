@@ -22,6 +22,19 @@ NORMAL_TRAFFIC = np.array([ 0. ])
 ATTACK_TRAFFIC = np.array([ 1. ]) 
 
 
+class ContextCriterion():
+    def score(self, model_output, target):
+        raise NotImplementedError
+
+    def __call__(self, p1, p2, p3=None):
+        if isinstance(p1, NeuralNet): # p1=Model, p2=dataset.X, p3=dataset.y
+            with torch.no_grad():
+                mout = p1.forward(p2)
+                return self.score(mout, p3)
+        else: # p1=model_output, p2=dataset.y
+            return self.score(p1, p2) 
+
+
 class WindowedDataGenerator():
     def __init__(self, overlapping, context_len):
         self.overlapping = overlapping
@@ -101,3 +114,35 @@ class WindowedDataGenerator():
         if to_sk_dataset:
             return self.sk_dataset(model_input)
         return model_input
+
+
+class WindowedAnomalyDetector(torch.nn.Module):
+    def __init__(self, wd: WindowedDataGenerator=None):
+        super(WindowedAnomalyDetector, self).__init__()
+        if wd is None:
+            print("WindowedDataGenerator not configured, anomaly detector not configured for pointwise prection")
+        else:
+            self.pointwise_ctxs = WindowedDataGenerator(1., wd.context_len)
+
+    def toembedding(self, x):
+        raise NotImplementedError()
+    
+    def context_anomaly(self, ctx):
+        raise NotImplementedError()
+
+    def pointwise_prediction(self, samples):
+        if not isinstance(samples, list):
+            samples = [samples]
+
+        channels = [c for c in samples[0].columns if c[0] != "_"]
+        for df in samples:
+            host_ts = df.groupby(level=["_host"])
+            for _, host_df in tqdm(host_ts):
+                y_hat = []
+                windows = self.pointwise_ctxs.dataframe_windows(host_df)
+                for context in windows:
+                    ctx = context[channels].values
+                    yi_hat = self.context_anomaly(ctx)
+                    y_hat.append(yi_hat)
+                host_df["y_hat"] = np.concat(y_hat)
+
