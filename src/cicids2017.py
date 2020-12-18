@@ -377,10 +377,11 @@ if __name__ == "__main__":
             loss = tripletloss.ContextualCoherency
         else:
             grid_params = { 
-                    "lr": [ 1e-3 ],
-                    "batch_size": [ 32 ],
+                    "lr": [ 1e-2, 5e-3, 1e-3 ],
+                    "batch_size": [ 32, 64, 128 ],
                     "module__input_size": [ input_size ],
-                    "module__latent_size": [ 128 ] }
+                    "module__rnn_layers": [ 1, 2 ]
+                    "module__latent_size": [ 8, 32, 64 ] }
             module = autoencoder.Seq2Seq
             loss = autoencoder.ReconstructionError 
             # Fix target output :-)
