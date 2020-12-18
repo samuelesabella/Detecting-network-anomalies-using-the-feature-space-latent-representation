@@ -2,30 +2,23 @@ from collections import defaultdict
 from pathlib import Path
 from sklearn import metrics
 from sklearn.metrics import classification_report
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import KFold
-from sklearn.model_selection import ParameterGrid
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV, KFold
 from skorch.callbacks import EarlyStopping
 from skorch.dataset import CVSplit
-from skorch.dataset import Dataset
 from skorch.helper import SliceDataset
-from skorch.helper import predefined_split
 from skorch.net import NeuralNet
-from tqdm import tqdm
+import AnchoredTs2Vec as tripletloss
+import Callbacks
+import Seq2Seq as autoencoder
+import WindowedDataGenerator as inputgen
 import _pickle as cPickle
 import argparse
 import data_generator as generator
 import gzip
-import itertools
-import logging
-import math
-import model_codebase as cb
 import numpy as np
 import os
 import pandas as pd
 import random
-import sklearn.metrics as skmetrics 
 import torch
 
 
@@ -38,13 +31,13 @@ np.random.seed(SEED)
 # CONSTANTS ..... #
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PATIENCE = 25
-MAX_EPOCHS = 250
+MAX_EPOCHS = 175
 
 WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
 DISCRETIZED = False
-CONTEXT_LEN = 80 # context window length, 28 minutes with 4spm (sample per minutes) 
-ACTIVITY_LEN = 40 # activity window length, 14 minutes 
+CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
+ACTIVITY_LEN = 40 # activity window length, 10 minutes 
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -110,8 +103,8 @@ class Cicids2017Preprocessor(generator.Preprocessor):
         def to_dt(x):
             return pd.to_datetime(x, format='%Y-%m-%dT%H:%M:%S.%f')
         
-        df["isanomaly"] = "none"
-        host_idxs = df.index.get_level_values("host")
+        df["_isanomaly"] = "none"
+        host_idxs = df.index.get_level_values("_host")
         times_idxs = df.index.get_level_values("_time")
         
         for atype, adetail, start, stop, host in ATTACKS:
@@ -122,12 +115,12 @@ class Cicids2017Preprocessor(generator.Preprocessor):
             else:
                 host_selector = (host_idxs==host)
             time_selector = (times_idxs > dt_start) & (times_idxs < dt_stop)
-            df.loc[host_selector & time_selector, "isanomaly"] = f"{atype}__{adetail}"
+            df.loc[host_selector & time_selector, "_isanomaly"] = f"{atype}__{adetail}"
         return df
     
     def preprocessing(self, df, fit=False):
         # Filtering hosts ..... #
-        df = df[df.index.get_level_values('host').str.contains("192.168.10.")]
+        df = df[df.index.get_level_values("host").str.contains("192.168.10.")]
         df = df.drop(["host_unreachable_flows:flows_as_client",
                       "dns_qry_sent_rsp_rcvd:replies_error_packets",
                       "dns_qry_rcvd_rsp_sent:replies_error_packets"], axis=1) # All zeros in the dataset
@@ -146,7 +139,8 @@ class Cicids2017Preprocessor(generator.Preprocessor):
 
         if self.compute_discrtz: 
             preproc_df = self.discretize(preproc_df, fit)
-    
+         
+        preproc_df.index.rename(["_device_category", "_host", "_time"], inplace=True)
         return Cicids2017Preprocessor.label(preproc_df)
 
 
@@ -178,7 +172,51 @@ class CICIDS2017(generator.FluxDataGenerator):
         })
 
     def category_map(self, new_samples):
-        return new_samples['host'].map(self.device_map)
+        return new_samples["_host"].map(self.device_map)
+
+
+# ----- ----- DATASET ----- ----- #
+# ----- ----- ------- ----- ----- #
+def cicids2017_partitions(df):
+    pr = Cicids2017Preprocessor(flevel="MAGIK", discretize=False)
+    
+    monday = 3
+    week_days = [4, 5, 6, 7]
+    week_mask = df.index.get_level_values("_time").day != monday
+    tserver_mask = df.index.get_level_values("host") != "192.168.10.50"
+    
+    TR_mask = week_mask & tserver_mask
+    DT_mask = np.bitwise_not(tserver_mask)
+    M_mask = np.bitwise_not(week_mask) & tserver_mask
+
+    df_TR = pr.preprocessing(df[TR_mask])
+    TS = pr.preprocessing(df[M_mask])
+    DT = pr.preprocessing(df[DT_mask])
+    
+    # Split TR by day
+    TR = []
+    for d in week_days:
+        day_df = df_TR[df_TR.index.get_level_values("_time").day == d]
+        TR.append(day_df)
+    
+    return { "TR": TR, "TS": TS, "DT": DT }
+
+
+def store_dataset(path, datasets):
+    path.mkdir(parents=True, exist_ok=True)
+    for k, v in datasets.items():
+        cPickle.dump(v, gzip.open(path / f"{k}.pkl", "wb"))
+
+
+def load_dataset(path):
+    datasets = {}
+    for f in os.listdir(path):
+        if ".pkl" not in f:
+            continue
+        fname = os.path.splitext(f)[0]
+        df = cPickle.load(gzip.open(path / f, "rb"))
+        datasets[fname] = df
+    return datasets
 
 
 # ----- ----- EXPERIMENTS ----- ----- #
@@ -212,9 +250,9 @@ def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
         "module__latent_size": 128
     }
 
-    dist_plot = cb.DistPlot(outpath)
-    loss_plot = cb.EpochPlot(outpath, ["train_loss", "valid_loss"])
-    rec_prec_plot = cb.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
+    dist_plot = Callbacks.DistPlot(outpath)
+    loss_plot = Callbacks.EpochPlot(outpath, ["train_loss", "valid_loss"])
+    rec_prec_plot = Callbacks.EpochPlot(outpath, ["valid_precision_score", "valid_recall_score"])
 
     net = NeuralNet(
         cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam, 
@@ -262,97 +300,46 @@ def ts2vec_cicids2017(train, testing, testing_attacks, outpath):
 
 # ----- ----- GRID SEARCH ----- ----- #
 # ----- ----- ----------- ----- ----- #
-def grid_search(train, grid_params, outpath):
-    net = NeuralNet(cb.STC, cb.Contextual_Coherency, optimizer=torch.optim.Adam,
-                    max_epochs=MAX_EPOCHS,
+def grid_search(train, grid_params, module, loss, outpath):
+    net = NeuralNet(module, loss, 
+                    optimizer=torch.optim.Adam, max_epochs=MAX_EPOCHS,
                     device=DEVICE, iterator_train__shuffle=False, 
                     callbacks=[ EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE) ],
-                    train_split=CVSplit(5, random_state=SEED),
-                    verbose=0)
-    kf = KFold(n_splits=5, shuffle=False, random_state=SEED)
-    gs = GridSearchCV(net, grid_params, cv=kf, refit=True, scoring=cb.Contextual_Coherency.as_score, verbose=10)
-    grid_res = gs.fit(SliceDataset(train))
+                    train_split=CVSplit(5, random_state=SEED), verbose=0)
 
-    grid_search_df = pd.DataFrame(grid_res.cv_results_)
-    # Get best configuration ..... #
-    fname = f"gridSearch__features_{FLEVEL}__overlapping_{WINDOW_OVERLAPPING}__ctxlen_{CONTEXT_LEN}__discretized_{DISCRETIZED}.pkl"
-    grid_search_df.to_pickle(outpath / fname)
+    kf = KFold(n_splits=5, shuffle=False, random_state=SEED)
+    gs = GridSearchCV(net, grid_params, cv=kf, refit=True, scoring=loss(), verbose=10)
+
+    grid_res = gs.fit(SliceDataset(train), train.y)
+
+    df = pd.DataFrame(grid_res.cv_results_)
+    # Adding some meta info
+    df["feature set"] = FLEVEL
+    df["overlapping"] = WINDOW_OVERLAPPING
+    df["context_len"] = CONTEXT_LEN
+    df["discretized"] = DISCRETIZED
+    df["module"] = module.__name__
+    fname = f"{FLEVEL}_{CONTEXT_LEN}_{WINDOW_OVERLAPPING}_{DISCRETIZED}_{module.__name__}"
+    df.to_pickle(outpath / fname)
 
 
 # ----- ----- MAIN ----- ----- #
 # ----- ----- ---- ----- ----- #
-def alternate_merge(ll):
-    return list(itertools.chain(*zip(*ll)))
-
-def prepare_dataset(df):
-    pr = Cicids2017Preprocessor(flevel=FLEVEL, discretize=DISCRETIZED)
-    
-    monday = 3
-    week_days = [4, 5, 6, 7]
-    week_mask = df.index.get_level_values("_time").day != monday
-    tserver_mask = df.index.get_level_values("host") != "192.168.10.50"
-    
-    df_training = df[week_mask & tserver_mask]
-    df_training = pr.preprocessing(df_training, fit=True)
-    
-    df_testing = df[np.bitwise_not(week_mask) & tserver_mask]
-    df_testing = pr.preprocessing(df_testing)
-    
-    # testing/test ..... #
-    training_windows = defaultdict(list)
-    for d in week_days:
-        day_df = df_training[df_training.index.get_level_values("_time").day == d]
-        day_windows = cb.ts_windowing(day_df, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
-        
-        for k, v in day_windows.items():
-            training_windows[k].append(v)
-    
-    # Training: all week, Validation: monday
-    training = { k: np.array(alternate_merge(v)) for k, v in training_windows.items() }
-    # training = { k: np.concatenate(v) for k, v in training_windows.items() }
-    normal_training_mask = np.where(training["isanomaly"] == False)[0]
-    training = { k: x[normal_training_mask] for k, x in training.items() }
-    
-    testing = cb.ts_windowing(df_testing, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
-    normal_testing_mask = np.where(testing["isanomaly"] == False)[0]
-    testing = { k: x[normal_testing_mask] for k, x in testing.items() }
-    
-    # Validation attacks: monday + week attacks
-    testing_attacks = df[np.bitwise_not(tserver_mask)]
-    testing_attacks = pr.preprocessing(testing_attacks)
-    testing_attacks = cb.ts_windowing(testing_attacks, overlapping=WINDOW_OVERLAPPING, context_len=CONTEXT_LEN)
-    
-    datasets = { "training": training, "testing": testing,
-                 "testing_attacks": testing_attacks }
-    return datasets
-
-
-def store_dataset(path, datasets):
-    path.mkdir(parents=True, exist_ok=True)
-    for k, v in datasets.items():
-        cPickle.dump(v, gzip.open(path / f"{k}.pkl", "wb"))
-
-
-def load_dataset(path):
-    datasets = {}
-    for f in os.listdir(path):
-        if ".pkl" not in f:
-            continue
-        fname = os.path.splitext(f)[0]
-        df = cPickle.load(gzip.open(path / f, "rb"))
-        datasets[fname] = df
-    return datasets
-
-
-def Dataset2GPU(dataset):
-    if torch.cuda.is_available():
-        dataset.X["context"] = dataset.X["context"].cuda()
-        dataset.y = dataset.y.cuda()
+def describe_datasets(training, testing, detection):
+    train_len = len(training.y)
+    print(f"TR: {train_len} contexts")
+    ts_len = len(testing.y)
+    print(f"TS: {ts_len} contexts")
+    dt_perc = len(detection[detection["_isanomaly"] != "none"]) / len(detection)
+    print(f"DT: {len(detection)} samples, {dt_perc}% attacks")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="mEmbedding training")
     parser.add_argument("--datapath", "-d", help="Dataset directory", required=True, type=Path)
+    parser.add_argument("--technique", "-t", 
+                        help="One among triplet loss based model (TL) or auto-encoder (AE)", 
+                        required=True, type=str, choices=["AE", "TL"])
     parser.add_argument("--grid", "-g", help="Start grid search", default=False, action="store_true")
     parser.add_argument("--outpath", "-o", help="Grid-search output file", required=True, type=Path)
     parser.add_argument("--reset_data", "-r", help="Recreates the dataset", default=False, action="store_true")
@@ -360,46 +347,46 @@ if __name__ == "__main__":
     args.outpath.mkdir(parents=True, exist_ok=True)
 
     # Data loading ..... # 
-    dataset_files = ["training", "validation", "testing", "validation_attacks", "testing_attacks"]
     dataset_cache = args.datapath / "cache"
     if dataset_cache.exists() and not args.reset_data:
         datasets = load_dataset(dataset_cache)
     else:
         timeseries_data = args.datapath / "CICIDS2017_ntop.pkl"
         df = pd.read_pickle(timeseries_data)
-        datasets = prepare_dataset(df)
+        datasets = cicids2017_partitions(df)
         store_dataset(dataset_cache, datasets) 
 
-    training = datasets["training"] 
-    testing = datasets["testing"]; 
-    testing_attacks = datasets["testing_attacks"]
-    input_size = training["context"].shape[-1]
+    dg = inputgen.WindowedDataGenerator(WINDOW_OVERLAPPING, CONTEXT_LEN)
+    training = dg(datasets["TR"])
+    testing = dg([datasets["TS"]])
+    detection = datasets["DT"]
+    describe_datasets(training, testing, detection)
 
-    train_len = len(training["isanomaly"])
-    print(f"training (week normal): {train_len} samples")
-    val_len = len(testing["isanomaly"])
-    print(f"testing (monday only): {val_len} samples")
-    val_att_len = len(testing_attacks['isanomaly'])
-    val_att_perc = np.unique(testing_attacks["isanomaly"], return_counts=True)[1] / val_att_len
-    print(f"testing_attacks (192.168.10.50): {val_att_len} samples, normal/attacks percentage: {val_att_perc}")
+    input_size = training.X["context"].shape[-1]
 
-    training = Dataset(*cb.dataset2tensors(training))
-    Dataset2GPU(training)
-    testing = Dataset(*cb.dataset2tensors(testing))
-    Dataset2GPU(testing)
-    testing_attacks = Dataset(*cb.dataset2tensors(testing_attacks))
-    Dataset2GPU(testing_attacks)
-
-    if args.grid: 
-        grid_params = {
-            "lr": [ 5e-4, 1e-4 ],
-            "batch_size": [ 4096, 6000 ],
-            "module__input_size": [ input_size ],
-            "module__rnn_size": [ 64, 128 ],
-            "module__rnn_layers": [ 1, 3 ],
-            "module__latent_size": [ 64, 128 ]}
-        grid_search(training, grid_params, args.outpath)
+    if args.grid:
+        if args.technique=="TL": 
+            grid_params = {
+                "lr": [ 5e-4, 1e-4 ],
+                "batch_size": [ 4096 ],
+                "module__input_size": [ input_size ],
+                "module__rnn_size": [ 64, 128 ],
+                "module__rnn_layers": [ 1, 3 ],
+                "module__latent_size": [ 64, 128 ] }
+            module = tripletloss.GruLinear
+            loss = tripletloss.ContextualCoherency
+        else:
+            grid_params = { 
+                    "lr": [ 1e-3 ],
+                    "batch_size": [ 32 ],
+                    "module__input_size": [ input_size ],
+                    "module__latent_size": [ 128 ] }
+            module = autoencoder.Seq2Seq
+            loss = autoencoder.ReconstructionError 
+            # Fix target output :-)
+            training.y = training.X["context"]
+        grid_search(training, grid_params, module, loss, args.outpath)
     else:
-        ts2vec, res = ts2vec_cicids2017(training, testing, testing_attacks, args.outpath)
+        ts2vec = ts2vec_cicids2017(training, testing, testing_attacks, args.outpath)
         print("Terminating, saving the model")
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")
