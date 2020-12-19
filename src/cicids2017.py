@@ -244,6 +244,7 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
     lr = 5e-4
     model_args = {
         "module__sigma": -.25,
+        "module__pool": "last",
         "module__input_size": 19,
         "module__rnn_size": 128,
         "module__rnn_layers": 3,

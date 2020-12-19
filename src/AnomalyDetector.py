@@ -130,7 +130,7 @@ class WindowedAnomalyDetector(skorch.net.NeuralNet):
         activity_len = int(self.context_len / 2)
         extract_activity = (lambda ctx: self.module_.toembedding(ctx[:, :activity_len]))
 
-        return self.pointwise(samples, self.module_.toembedding, "_embedding", pad_with=np.nan)
+        return self.pointwise(samples, extract_activity, "_embedding", pad_with=np.nan)
     
     def pointwise_anomaly(self, samples, one_hot=False):
         return self.pointwise(samples, self.module_.context_anomaly, "_y_hat")
