@@ -151,6 +151,14 @@ class WindowedAnomalyDetector(skorch.net.NeuralNet):
                 windows = self.pointwise_ctxs.dataframe_windows(host_df)
                 ctx_batch = np.stack([ ctx[channels].values for ctx in windows ])
 
+                def aperc(ctx):
+                    return self.pointwise_ctxs.anomaly_metadata(ctx)[1] 
+                windows = self.pointwise_ctxs.dataframe_windows(host_df)
+                aperc = np.array([ aperc(ctx) for ctx in windows ])
+                vaperc = np.full((len(host_df), 1), pad_with).squeeze()
+                vaperc[activity_len:-activity_len+1] = aperc
+                host_df["_aperc"] = vaperc
+
                 with torch.no_grad():
                     pred = fun(torch.tensor(ctx_batch))
 
