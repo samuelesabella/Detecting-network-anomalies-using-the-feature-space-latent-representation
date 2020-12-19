@@ -32,9 +32,9 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.DoubleTensor)
 
 PATIENCE = 25
-MAX_EPOCHS = 2
+MAX_EPOCHS = 250
 
-WINDOW_OVERLAPPING = .45
+WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
 DISCRETIZED = False
 CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
@@ -377,6 +377,7 @@ if __name__ == "__main__":
             grid_params = {
                 "lr": [ 5e-4, 1e-4 ],
                 "batch_size": [ 4096 ],
+                "module__pool": [ "mean", "last" ],
                 "module__input_size": [ input_size ],
                 "module__rnn_size": [ 64, 128 ],
                 "module__rnn_layers": [ 1, 3 ],

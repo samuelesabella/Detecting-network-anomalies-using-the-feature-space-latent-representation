@@ -95,8 +95,9 @@ class AnchorTs2Vec(torch.nn.Module):
 
 
 class GruLinear(AnchorTs2Vec):
-    def __init__(self, input_size=None, rnn_size=64, rnn_layers=64, latent_size=64, **kwargs):
+    def __init__(self, input_size=None, rnn_size=64, rnn_layers=64, latent_size=64, pool="mean", **kwargs):
         super(GruLinear, self).__init__(**kwargs)
+        self.pool = pool
         self.rnn = nn.GRU(input_size=input_size, hidden_size=rnn_size, num_layers=rnn_layers, batch_first=True)
         self.embedder = nn.Sequential(
             nn.Linear(rnn_size, latent_size),
@@ -106,5 +107,9 @@ class GruLinear(AnchorTs2Vec):
 
     def toembedding(self, x):
         rnn_out, _ = self.rnn(x)
-        e = self.embedder(rnn_out[:, -1])
+        if self.pool == "mean":
+            z = torch.mean(rnn_out, axis=1) 
+        elif self.pool == "last":
+            z = rnn_out[:, -1]
+        e = self.embedder(z)
         return e
