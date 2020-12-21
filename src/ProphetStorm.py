@@ -18,8 +18,10 @@ def to_prophet_input(samples):
 
     for df in samples:
         df.reset_index(inplace=True)
-        time_shifted = df.groupby("_host", as_index=False).apply(lambda x: add_year(x["_time"]))
-        df["_time"] = time_shifted.reset_index(level=0, drop=True)
+        for h in df["_host"].unique():
+            host_mask = (df["_host"] == h)
+            time_shifted = add_year(df.loc[host_mask, "_time"])
+            df.loc[host_mask, "_time"] = time_shifted
     df = pd.concat(samples)
     df = df.rename(columns={"_time": "ds"})
     channels = [c for c in df.columns if ((c[0]!="_") and ("time" not in c)) ]
