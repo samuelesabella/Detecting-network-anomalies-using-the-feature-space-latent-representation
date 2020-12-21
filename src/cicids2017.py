@@ -34,7 +34,7 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available(
 PATIENCE = 25
 MAX_EPOCHS = 250
 
-WINDOW_OVERLAPPING = .95
+WINDOW_OVERLAPPING = .45 # .95
 FLEVEL = "MAGIK"
 DISCRETIZED = False
 CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
@@ -241,9 +241,8 @@ def history2dframe(net, labels=None):
 
 def configureAnchor(outpath, dt, checkpoint: Path = None):
     batch_size = 4096
-    lr = 5e-4
+    lr = 1e-4
     model_args = {
-        "module__sigma": -.25,
         "module__pool": "last",
         "module__input_size": 19,
         "module__rnn_size": 128,
@@ -253,7 +252,7 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
 
     dist_plot = Callbacks.DistPlot(outpath)
     loss_plot = Callbacks.EpochPlot(outpath, ["train_loss", "valid_loss"])
-    rec_prec_plot = Callbacks.EpochPlot(outpath, ["DT_precision_score", "DT_recall_score"])
+    # rec_prec_plot = Callbacks.EpochPlot(outpath, ["DT_precision_score", "DT_recall_score"])
 
     net = ad.WindowedAnomalyDetector(
         tripletloss.GruLinear, tripletloss.ContextualCoherency, 
@@ -263,11 +262,12 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
         **model_args,
         device=DEVICE, verbose=1,
         train_split=CVSplit(5, random_state=SEED),
-        callbacks=[ Callbacks.DetectionScore(skmetrics.recall_score, dt),
-                    Callbacks.DetectionScore(skmetrics.precision_score, dt),
-                    Callbacks.DetectionScore(skmetrics.roc_auc_score, dt),
-                    dist_plot, loss_plot, rec_prec_plot,
-                    EarlyStopping("DT_roc_auc_score", lower_is_better=False, patience=7)])    
+        callbacks=[ # Callbacks.DetectionScore(skmetrics.recall_score, dt),
+                    # Callbacks.DetectionScore(skmetrics.precision_score, dt),
+                    # Callbacks.DetectionScore(skmetrics.roc_auc_score, dt),
+                    # rec_prec_plot,
+                    dist_plot, loss_plot,
+                    EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)])    
     if checkpoint is not None:
         net.initialize_context(CONTEXT_LEN)
         net.initialize()
@@ -278,6 +278,7 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
 
 
 def ts2vec_cicids2017(net, train, testing, testing_attacks, outpath):
+    net.train_split = predefined_split(testing)
     net.fit(train)
 
     # Test Loss ..... #
@@ -323,12 +324,12 @@ def grid_search(train, grid_params, module, loss, outpath):
 
     df = pd.DataFrame(grid_res.cv_results_)
     # Adding some meta info
-    df["feature set"] = FLEVEL
-    df["overlapping"] = WINDOW_OVERLAPPING
-    df["context_len"] = CONTEXT_LEN
-    df["discretized"] = DISCRETIZED
-    df["module"] = module.__name__
-    fname = f"{FLEVEL}_{CONTEXT_LEN}_{WINDOW_OVERLAPPING}_{DISCRETIZED}_{module.__name__}"
+    df["param_feature_set"] = FLEVEL
+    df["param_overlapping"] = WINDOW_OVERLAPPING
+    df["param_context_len"] = CONTEXT_LEN
+    df["param_discretized"] = DISCRETIZED
+    df["param_module"] = module.__name__
+    fname = f"gridsearch_{FLEVEL}_{CONTEXT_LEN}_{WINDOW_OVERLAPPING}_{DISCRETIZED}_{module.__name__}.pkl"
     df.to_pickle(outpath / fname)
 
 
@@ -387,11 +388,12 @@ if __name__ == "__main__":
             loss = tripletloss.ContextualCoherency
         else:
             grid_params = { 
-                    "lr": [ 1e-2, 5e-3, 1e-3 ],
-                    "batch_size": [ 32, 64, 128 ],
+                    "lr": [ .1 ], #, .01 ],
+                    "batch_size": [ 128 ], #, 64, 128 ],
                     "module__input_size": [ input_size ],
-                    "module__rnn_layers": [ 1, 2 ],
-                    "module__latent_size": [ 8, 32, 64 ] }
+                    "module__teacher_forcing_ratio": [ 1. ],
+                    "module__rnn_layers": [ 1], # , 2 ],
+                    "module__latent_size": [ 128] } # , 32, 64 ] }
             module = autoencoder.Seq2Seq
             loss = autoencoder.ReconstructionError 
             # Fix target output :-)
@@ -400,6 +402,6 @@ if __name__ == "__main__":
     else:
         if args.technique=="TL":
             net = configureAnchor(args.outpath, detection)
-        ts2vec = ts2vec_cicids2017(net, training, testing, detection, args.outpath)
+        ts2vec, _ = ts2vec_cicids2017(net, training, testing, detection, args.outpath)
         print("Terminating, saving the model")
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")

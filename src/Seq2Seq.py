@@ -8,8 +8,8 @@ from AnomalyDetector import ContextCriterion
 # ----- ----- ------------- ----- ----- #
 class ReconstructionError(ContextCriterion):
     def score(self, model_out, target):
-        pointwise_mse = torch.sum(torch.square(model_out - target) , axis=2) # Error of each point prediction
-        batch_mse = torch.sum(pointwise_mse) # Sum of error of each prediction
+        pointwise_mse = torch.mean(torch.square(model_out - target) , axis=2) # Error of each point prediction
+        batch_mse = torch.mean(pointwise_mse) # Mean of error of each prediction
         return torch.mean(batch_mse)
 
 
@@ -18,12 +18,19 @@ class ReconstructionError(ContextCriterion):
 class Seq2Seq(torch.nn.Module):
     def __init__(self, input_size=None, latent_size=64, rnn_layers=64, teacher_forcing_ratio=1.):
         super(Seq2Seq, self).__init__()
+
+        self.pool = "mean"
         self.teacher_forcing_ratio = teacher_forcing_ratio
         self.hidden_size = latent_size
 
         self.encoder = nn.GRU(input_size=input_size, hidden_size=latent_size, num_layers=rnn_layers, batch_first=True)
         self.decoder = nn.GRU(input_size=input_size, hidden_size=latent_size, num_layers=rnn_layers, batch_first=True)
-        self.out = nn.Linear(latent_size, input_size)
+        # self.out = nn.Linear(latent_size, input_size)
+        self.out = nn.Sequential(
+            nn.Linear(latent_size, latent_size),
+            nn.ReLU(),
+            nn.Linear(latent_size, input_size),
+            nn.ReLU())
 
     def encoder_init_hidden(self, batch_size):
         return torch.zeros(1, batch_size, self.hidden_size)
@@ -37,11 +44,17 @@ class Seq2Seq(torch.nn.Module):
 
     def forward(self, context=None, **kwargs): 
         X = context
-        _, h_n = self.encoder(X)
+        rnn_out, _ = self.encoder(X)
 
-        decoder_input = torch.zeros_like(X[:, 0:1, :]) # batch_size, sequence_len, features
-        decoder_hidden = h_n
+        if self.pool == "mean":
+            h_n = torch.mean(rnn_out, axis=1) 
+        elif self.pool == "last":
+            h_n = rnn_out[:, -1]
+
+        decoder_input = torch.zeros_like(X[:, 0:1, :]) - 1 # batch_size, sequence_len, features
+        decoder_hidden = h_n.unsqueeze(0)
         
+        xi_tilde = decoder_input # Fix for no teacher forcing first iteration
         x_tilde = torch.Tensor([])
         use_teacher_forcing = (True if random.random() < self.teacher_forcing_ratio else False)
         for i in range(X.size(1)): # sequence_len
@@ -49,7 +62,7 @@ class Seq2Seq(torch.nn.Module):
                 decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden)
                 decoder_input = X[:, i:i+1, :]
             else:
-                decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden)
+                decoder_output, decoder_hidden = self.decoder(xi_tilde, decoder_hidden)
                 decoder_input = decoder_output.detach()
             xi_tilde = self.out(decoder_output.squeeze()).unsqueeze(1)
             x_tilde = torch.cat([x_tilde, xi_tilde], axis=1)
