@@ -4,6 +4,7 @@ import sklearn.metrics as skmetrics
 from sklearn.model_selection import GridSearchCV, KFold
 from skorch.callbacks import EarlyStopping
 from skorch.dataset import CVSplit
+from skorch.helper import predefined_split
 from skorch.helper import SliceDataset
 from skorch.net import NeuralNet
 import AnchoredTs2Vec as tripletloss
@@ -34,10 +35,10 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available(
 PATIENCE = 25
 MAX_EPOCHS = 250
 
-WINDOW_OVERLAPPING = .45 # .95
+WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
 DISCRETIZED = False
-CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
+CONTEXT_LEN = 40 # context window length, 20 minutes with 4spm (sample per minutes) 
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -277,6 +278,42 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
     return net
 
 
+def configureSeq2Vec(outpath, dt, checkpoint: Path = None):
+    batch_size = 32
+    lr = .1
+    model_args = {
+        "module__pool": "mean",
+        "module__input_size": 19,
+        "module__teacher_forcing_ratio": 1.,
+        "module__rnn_layers": 1,
+        "module__latent_size": 128
+    }
+
+    loss_plot = Callbacks.EpochPlot(outpath, ["train_loss", "valid_loss"])
+    # rec_prec_plot = Callbacks.EpochPlot(outpath, ["DT_precision_score", "DT_recall_score"])
+
+    net = ad.WindowedAnomalyDetector(
+        autoencoder.Seq2Seq, autoencoder.ReconstructionError, 
+        optimizer=torch.optim.Adam, 
+        iterator_train__shuffle=False,
+        lr=lr, batch_size=batch_size, max_epochs=MAX_EPOCHS,
+        **model_args,
+        device=DEVICE, verbose=1,
+        train_split=CVSplit(5, random_state=SEED),
+        callbacks=[ # Callbacks.DetectionScore(skmetrics.recall_score, dt),
+                    # Callbacks.DetectionScore(skmetrics.precision_score, dt),
+                    # Callbacks.DetectionScore(skmetrics.roc_auc_score, dt),
+                    # rec_prec_plot,
+                    # loss_plot,
+                    EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)])    
+    if checkpoint is not None:
+        net.initialize_context(CONTEXT_LEN)
+        net.initialize()
+        state_dict = torch.load(str(checkpoint), map_location=torch.device("cpu"))
+        net.module_.load_state_dict(state_dict)
+
+    return net
+
 def ts2vec_cicids2017(net, train, testing, testing_attacks, outpath):
     net.train_split = predefined_split(testing)
     net.fit(train)
@@ -374,34 +411,37 @@ if __name__ == "__main__":
 
     input_size = training.X["context"].shape[-1]
 
-    if args.grid:
-        if args.technique=="TL": 
-            grid_params = {
-                "lr": [ 5e-4, 1e-4 ],
-                "batch_size": [ 4096 ],
-                "module__pool": [ "mean", "last" ],
+    if args.technique=="TL":
+        grid_params = {
+            "lr": [ 5e-4, 1e-4 ],
+            "batch_size": [ 4096 ],
+            "module__pool": [ "mean", "last" ],
+            "module__input_size": [ input_size ],
+            "module__rnn_size": [ 64, 128 ],
+            "module__rnn_layers": [ 1, 3 ],
+            "module__latent_size": [ 64, 128 ] }
+        module = tripletloss.GruLinear
+        loss = tripletloss.ContextualCoherency
+        net = configureAnchor(args.outpath, detection)
+    else:
+        grid_params = { 
+                "lr": [ .1 ], #, .01 ],
+                "batch_size": [ 128 ], #, 64, 128 ],
                 "module__input_size": [ input_size ],
-                "module__rnn_size": [ 64, 128 ],
-                "module__rnn_layers": [ 1, 3 ],
-                "module__latent_size": [ 64, 128 ] }
-            module = tripletloss.GruLinear
-            loss = tripletloss.ContextualCoherency
-        else:
-            grid_params = { 
-                    "lr": [ .1 ], #, .01 ],
-                    "batch_size": [ 128 ], #, 64, 128 ],
-                    "module__input_size": [ input_size ],
-                    "module__teacher_forcing_ratio": [ 1. ],
-                    "module__rnn_layers": [ 1], # , 2 ],
-                    "module__latent_size": [ 128] } # , 32, 64 ] }
-            module = autoencoder.Seq2Seq
-            loss = autoencoder.ReconstructionError 
-            # Fix target output :-)
-            training.y = training.X["context"]
+                "module__teacher_forcing_ratio": [ 1. ],
+                "module__rnn_layers": [ 1], # , 2 ],
+                "module__latent_size": [ 128] } # , 32, 64 ] }
+        module = autoencoder.Seq2Seq
+        loss = autoencoder.ReconstructionError 
+        net = configureSeq2Vec(args.outpath, detection)
+        # Fix target output :-)
+        training.y = training.X["context"]
+        testing.y = testing.X["context"]
+
+
+    if args.grid:
         grid_search(training, grid_params, module, loss, args.outpath)
     else:
-        if args.technique=="TL":
-            net = configureAnchor(args.outpath, detection)
         ts2vec, _ = ts2vec_cicids2017(net, training, testing, detection, args.outpath)
         print("Terminating, saving the model")
         torch.save(ts2vec.state_dict(), args.outpath / "ts2vec.torch")
