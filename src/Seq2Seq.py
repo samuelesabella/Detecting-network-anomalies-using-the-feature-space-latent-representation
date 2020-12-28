@@ -35,14 +35,6 @@ class Seq2Seq(torch.nn.Module):
         return torch.zeros(1, batch_size, self.hidden_size)
 
     def toembedding(self, X):
-        _ , h_n = self.rnn(X)
-        return h_n
-
-    def context_anomaly(self, ctx):
-        return NotImplementedError
-
-    def forward(self, context=None, **kwargs): 
-        X = context
         rnn_out, _ = self.encoder(X)
 
         if self.pool == "mean":
@@ -50,6 +42,14 @@ class Seq2Seq(torch.nn.Module):
         elif self.pool == "last":
             h_n = rnn_out[:, -1]
 
+        return h_n
+
+    def context_anomaly(self, ctx):
+        return NotImplementedError
+
+    def forward(self, context=None, **kwargs): 
+        X = context
+        h_n = self.toembedding(X)
         decoder_input = torch.zeros_like(X[:, 0:1, :]) - 1 # batch_size, sequence_len, features
         decoder_hidden = h_n.unsqueeze(0)
         

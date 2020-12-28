@@ -35,10 +35,10 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available(
 PATIENCE = 25
 MAX_EPOCHS = 250
 
-WINDOW_OVERLAPPING = .95
+WINDOW_OVERLAPPING = .45 # .95
 FLEVEL = "MAGIK"
 DISCRETIZED = False
-CONTEXT_LEN = 40 # context window length, 20 minutes with 4spm (sample per minutes) 
+CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -240,7 +240,7 @@ def history2dframe(net, labels=None):
     return s.infer_objects()
 
 
-def configureAnchor(outpath, dt, checkpoint: Path = None):
+def configureAnchor(outpath, checkpoint: Path = None):
     batch_size = 4096
     lr = 1e-4
     model_args = {
@@ -253,7 +253,6 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
 
     dist_plot = Callbacks.DistPlot(outpath)
     loss_plot = Callbacks.EpochPlot(outpath, ["train_loss", "valid_loss"])
-    # rec_prec_plot = Callbacks.EpochPlot(outpath, ["DT_precision_score", "DT_recall_score"])
 
     net = ad.WindowedAnomalyDetector(
         tripletloss.GruLinear, tripletloss.ContextualCoherency, 
@@ -263,11 +262,7 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
         **model_args,
         device=DEVICE, verbose=1,
         train_split=CVSplit(5, random_state=SEED),
-        callbacks=[ # Callbacks.DetectionScore(skmetrics.recall_score, dt),
-                    # Callbacks.DetectionScore(skmetrics.precision_score, dt),
-                    # Callbacks.DetectionScore(skmetrics.roc_auc_score, dt),
-                    # rec_prec_plot,
-                    dist_plot, loss_plot,
+        callbacks=[ dist_plot, loss_plot,
                     EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)])    
     if checkpoint is not None:
         net.initialize_context(CONTEXT_LEN)
@@ -278,19 +273,18 @@ def configureAnchor(outpath, dt, checkpoint: Path = None):
     return net
 
 
-def configureSeq2Vec(outpath, dt, checkpoint: Path = None):
-    batch_size = 32
-    lr = .1
+def configureSeq2Seq(outpath, checkpoint: Path = None):
+    batch_size = 64
+    lr = 1e-4
     model_args = {
         "module__pool": "mean",
         "module__input_size": 19,
-        "module__teacher_forcing_ratio": 1.,
+        "module__teacher_forcing_ratio": 7.,
         "module__rnn_layers": 1,
         "module__latent_size": 128
     }
 
     loss_plot = Callbacks.EpochPlot(outpath, ["train_loss", "valid_loss"])
-    # rec_prec_plot = Callbacks.EpochPlot(outpath, ["DT_precision_score", "DT_recall_score"])
 
     net = ad.WindowedAnomalyDetector(
         autoencoder.Seq2Seq, autoencoder.ReconstructionError, 
@@ -300,11 +294,7 @@ def configureSeq2Vec(outpath, dt, checkpoint: Path = None):
         **model_args,
         device=DEVICE, verbose=1,
         train_split=CVSplit(5, random_state=SEED),
-        callbacks=[ # Callbacks.DetectionScore(skmetrics.recall_score, dt),
-                    # Callbacks.DetectionScore(skmetrics.precision_score, dt),
-                    # Callbacks.DetectionScore(skmetrics.roc_auc_score, dt),
-                    # rec_prec_plot,
-                    # loss_plot,
+        callbacks=[ loss_plot,
                     EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)])    
     if checkpoint is not None:
         net.initialize_context(CONTEXT_LEN)
@@ -315,32 +305,7 @@ def configureSeq2Vec(outpath, dt, checkpoint: Path = None):
     return net
 
 def ts2vec_cicids2017(net, train, testing, testing_attacks, outpath):
-    net.train_split = predefined_split(testing)
     net.fit(train)
-
-    # Test Loss ..... #
-    # loss_ts = cb.Contextual_Coherency()(net.forward(testing.X))
-    # print(f"Testing loss: {loss_ts}")
-
-    # Detection capabilities ..... #
-    # TODO: fix
-    # X_attacks = testing_attacks.X["context"]
-    # y_attacks = testing_attacks.y.cpu()
-    # y_hat = net.module_.context_anomaly(X_attacks).detach()
-    # y_hat = np.round(y_hat.cpu())
-    # 
-    # report = classification_report(y_attacks, y_hat)
-    # metrics_rep = [ skmetrics.roc_auc_score,
-    #                 skmetrics.precision_score, skmetrics.recall_score,
-    #                 skmetrics.accuracy_score,  skmetrics.f1_score]
-    # for m in metrics_rep:
-    #     mres = m(y_attacks, y_hat)
-    #     print(f"{m.__name__}(moday+attacks): {mres}")
-
-    # tn, fp, fn, tp = skmetrics.confusion_matrix(y_attacks, y_hat, normalize="all").ravel()
-    # print("\n Confusion matrix")
-    # print(f"\ttp: {tp} \tfp: {fp} \n\tfn: {fn} \ttn: {tn}")
-    # print(f"\n{report}")
     
     return net.module_, history2dframe(net)
 
@@ -392,6 +357,9 @@ if __name__ == "__main__":
     parser.add_argument("--reset_data", "-r", help="Recreates the dataset", default=False, action="store_true")
     args = parser.parse_args()
     args.outpath.mkdir(parents=True, exist_ok=True)
+    
+    # if args.technique == "AE":
+    #     CONTEXT_LEN = 15
 
     # Data loading ..... # 
     dataset_cache = args.datapath / "cache"
@@ -408,7 +376,6 @@ if __name__ == "__main__":
     testing = dg([datasets["TS"]])
     detection = datasets["DT"]
     describe_datasets(training, testing, detection)
-
     input_size = training.X["context"].shape[-1]
 
     if args.technique=="TL":
@@ -422,22 +389,21 @@ if __name__ == "__main__":
             "module__latent_size": [ 64, 128 ] }
         module = tripletloss.GruLinear
         loss = tripletloss.ContextualCoherency
-        net = configureAnchor(args.outpath, detection)
+        net = configureAnchor(args.outpath)
     else:
         grid_params = { 
-                "lr": [ .1 ], #, .01 ],
-                "batch_size": [ 128 ], #, 64, 128 ],
+                "lr": [ 1e-3, 1e-4 ],
+                "batch_size": [ 64, 128 ],
                 "module__input_size": [ input_size ],
-                "module__teacher_forcing_ratio": [ 1. ],
-                "module__rnn_layers": [ 1], # , 2 ],
-                "module__latent_size": [ 128] } # , 32, 64 ] }
+                "module__teacher_forcing_ratio": [ 1., .7 ],
+                "module__rnn_layers": [ 1 ],
+                "module__latent_size": [ 32, 64, 128 ] }
         module = autoencoder.Seq2Seq
         loss = autoencoder.ReconstructionError 
-        net = configureSeq2Vec(args.outpath, detection)
+        net = configureSeq2Seq(args.outpath)
         # Fix target output :-)
         training.y = training.X["context"]
         testing.y = testing.X["context"]
-
 
     if args.grid:
         grid_search(training, grid_params, module, loss, args.outpath)
