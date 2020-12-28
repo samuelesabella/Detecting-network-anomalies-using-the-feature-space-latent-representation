@@ -1,0 +1,3 @@
+[submodule "src/lib/KitNET-py"]
+	path = src/lib/KitNET-py
+	url = https://github.com/ymirsky/KitNET-py
