@@ -24,7 +24,7 @@ def to_prophet_input(samples):
             df.loc[host_mask, "_time"] = time_shifted
     df = pd.concat(samples)
     df = df.rename(columns={"_time": "ds"})
-    channels = [c for c in df.columns if ((c[0]!="_") and ("time" not in c)) ]
+    channels = [c for c in df.columns if ((c[0]!="_") and ("time:" not in c)) ]
     return df[channels]
 
 
