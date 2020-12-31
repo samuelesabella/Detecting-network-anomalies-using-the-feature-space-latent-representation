@@ -180,6 +180,15 @@ class CICIDS2017(generator.FluxDataGenerator):
 
 # ----- ----- DATASET ----- ----- #
 # ----- ----- ------- ----- ----- #
+def split_days(df):
+    df_split = []
+    days = np.unique(df.index.get_level_values("_time").day)
+    for d in days:
+        daily_df = df[df.index.get_level_values("_time").day == d]
+        df_split.append(daily_df)
+    return df_split
+
+
 def cicids2017_partitions(df):
     pr = Cicids2017Preprocessor(flevel="MAGIK", discretize=False)
     
@@ -192,17 +201,11 @@ def cicids2017_partitions(df):
     DT_mask = np.bitwise_not(tserver_mask)
     M_mask = np.bitwise_not(week_mask) & tserver_mask
 
-    df_TR = pr.preprocessing(df[TR_mask])
+    TR = pr.preprocessing(df[TR_mask])
     TS = pr.preprocessing(df[M_mask])
     DT = pr.preprocessing(df[DT_mask])
     
-    # Split TR by day
-    TR = []
-    for d in week_days:
-        day_df = df_TR[df_TR.index.get_level_values("_time").day == d]
-        TR.append(day_df)
-    
-    return { "TR": TR, "TS": TS, "DT": DT }
+    return { "TR": split_days(TR), "TS": split_days(TS), "DT": split_days(DT) }
 
 
 def store_dataset(path, datasets):
