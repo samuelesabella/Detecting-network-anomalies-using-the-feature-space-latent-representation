@@ -35,10 +35,12 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available(
 PATIENCE = 25
 MAX_EPOCHS = 250
 
-WINDOW_OVERLAPPING = .45 # .95
+WINDOW_OVERLAPPING = .95
 FLEVEL = "MAGIK"
 DISCRETIZED = False
-CONTEXT_LEN = 80 # context window length, 20 minutes with 4spm (sample per minutes) 
+CONTEXT_LEN = -1 # context window length, 20 minutes with 4spm (sample per minutes) 
+TL_CONTEXT_LEN = 80
+SEQ2SEQ_CONTEXT_LEN = 15
 
 
 # ----- ----- PREPROCESSING ----- ----- #
@@ -265,7 +267,7 @@ def configureAnchor(outpath, checkpoint: Path = None):
         callbacks=[ dist_plot, loss_plot,
                     EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)])    
     if checkpoint is not None:
-        net.initialize_context(CONTEXT_LEN)
+        net.initialize_context(TL_CONTEXT_LEN)
         net.initialize()
         state_dict = torch.load(str(checkpoint), map_location=torch.device("cpu"))
         net.module_.load_state_dict(state_dict)
@@ -297,7 +299,7 @@ def configureSeq2Seq(outpath, checkpoint: Path = None):
         callbacks=[ loss_plot,
                     EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)])    
     if checkpoint is not None:
-        net.initialize_context(CONTEXT_LEN)
+        net.initialize_context(SEQ2SEQ_CONTEXT_LEN)
         net.initialize()
         state_dict = torch.load(str(checkpoint), map_location=torch.device("cpu"))
         net.module_.load_state_dict(state_dict)
@@ -358,8 +360,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.outpath.mkdir(parents=True, exist_ok=True)
     
-    # if args.technique == "AE":
-    #     CONTEXT_LEN = 15
+    CONTEXT_LEN = SEQ2SEQ_CONTEXT_LEN if args.technique=="AE" else TL_CONTEXT_LEN
 
     # Data loading ..... # 
     dataset_cache = args.datapath / "cache"

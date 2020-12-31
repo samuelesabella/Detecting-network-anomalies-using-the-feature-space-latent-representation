@@ -132,7 +132,7 @@ class WindowedAnomalyDetector(skorch.net.NeuralNet):
 
         return self.pointwise(samples, extract_activity, "_embedding", pad_with=np.nan)
     
-    def pointwise_anomaly(self, samples, one_hot=False):
+    def pointwise_anomaly(self, samples):
         return self.pointwise(samples, self.module_.context_anomaly, "_y_hat")
 
     def pointwise(self, samples, fun, label, pad_with=0.):
