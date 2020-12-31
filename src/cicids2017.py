@@ -270,7 +270,7 @@ def configureAnchor(outpath, checkpoint: Path = None):
         callbacks=[ dist_plot, loss_plot,
                     EarlyStopping("valid_loss", lower_is_better=True, patience=PATIENCE)])    
     if checkpoint is not None:
-        net.initialize_context(TL_CONTEXT_LEN)
+        net.initialize_context(int(TL_CONTEXT_LEN / 2))
         net.initialize()
         state_dict = torch.load(str(checkpoint), map_location=torch.device("cpu"))
         net.module_.load_state_dict(state_dict)

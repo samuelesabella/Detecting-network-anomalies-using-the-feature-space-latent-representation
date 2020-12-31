@@ -35,7 +35,6 @@ class WindowedDataGenerator():
     def __init__(self, overlapping, context_len):
         self.overlapping = overlapping
         self.context_len = context_len
-        self.activity_len = int(context_len / 2)
         self.window_stepsize = max(int(context_len * (1 - overlapping)), 1) 
 
     def dataframe_windows(self, df):
@@ -111,26 +110,23 @@ class WindowedDataGenerator():
 
 
 class WindowedAnomalyDetector(skorch.net.NeuralNet):
-    def __init__(self, *args, context_len=None, **kwargs):
+    def __init__(self, *args, wlen=None, **kwargs):
         self.pointwise_ctxs = None
-        if context_len is not None:
-            self.initialize_context(context_len)
+        if wlen is not None:
+            self.initialize_context(wlen)
         super(WindowedAnomalyDetector, self).__init__(*args, **kwargs)
     
-    def initialize_context(self, context_len):
-        self.context_len = context_len
-        self.pointwise_ctxs = WindowedDataGenerator(1., context_len)
+    def initialize_context(self, wlen):
+        self.wlen = wlen
+        self.pointwise_ctxs = WindowedDataGenerator(1., wlen)
 
     def fit(self, *args, **kwargs):
-        context_len = args[0].X["context"].size(1)
-        self.initialize_context(context_len)
+        wlen = args[0].X["context"].size(1)
+        self.initialize_context(wlen)
         super().fit(*args, **kwargs)
 
     def pointwise_embedding(self, samples):
-        activity_len = int(self.context_len / 2)
-        extract_activity = (lambda ctx: self.module_.toembedding(ctx[:, :activity_len]))
-
-        return self.pointwise(samples, extract_activity, "_embedding", pad_with=np.nan)
+        return self.pointwise(samples, self.module_.toembedding, "_embedding", pad_with=np.nan)
     
     def pointwise_anomaly(self, samples):
         return self.pointwise(samples, self.module_.context_anomaly, "_y_hat")
@@ -142,7 +138,9 @@ class WindowedAnomalyDetector(skorch.net.NeuralNet):
         if not isinstance(samples, list):
             samples = [samples]
 
-        activity_len = int(self.context_len / 2)
+        halfwlen = int(self.wlen / 2)
+        aus = 1 if (halfwlen % 2 ==0) else 0
+        ebs_sl = slice(halfwlen, -halfwlen + aus)
         res = [ [] for i in range(len(samples)) ]
         channels = [c for c in samples[0].columns if c[0] != "_"]
         for i, df in enumerate(samples):
@@ -156,7 +154,7 @@ class WindowedAnomalyDetector(skorch.net.NeuralNet):
                 windows = self.pointwise_ctxs.dataframe_windows(host_df)
                 aperc = np.array([ aperc(ctx) for ctx in windows ])
                 vaperc = np.full((len(host_df), 1), pad_with).squeeze()
-                vaperc[activity_len:-activity_len+1] = aperc
+                vaperc[ebs_sl] = aperc
                 host_df["_aperc"] = vaperc
 
                 with torch.no_grad():
@@ -165,10 +163,10 @@ class WindowedAnomalyDetector(skorch.net.NeuralNet):
                 # Fix windowing padding with zeros (hope no anomaly)
                 if len(pred.shape) == 1:
                     y_hat = np.full((len(host_df), 1), pad_with).squeeze()
-                    y_hat[activity_len:-activity_len+1] = pred.numpy()
+                    y_hat[ebs_sl] = pred.numpy()
                 else:
                     y_hat = np.full((len(host_df), pred.size(1)), pad_with)
-                    y_hat[activity_len:-activity_len+1] = pred.numpy()
+                    y_hat[ebs_sl] = pred.numpy()
                     y_hat = [ np.nan if np.isnan(x).any() else x for x in list(y_hat) ]
                 
                 host_df[label] = y_hat
