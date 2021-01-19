@@ -38,6 +38,7 @@ RUN add-apt-repository ppa:deadsnakes/ppa
 RUN apt install -y python3.7 python3-pip
 RUN python3.7 -m pip install --upgrade pip
 RUN pip3 install -r /app/tesi_sabella/lab.requirements.txt 
+RUN pip3 install pyts 
 
 COPY ./pcaps /app/pcaps/
 COPY ./container_init.sh /app/container_init.sh
