@@ -4,7 +4,7 @@ This directory contains almost all what is needed to turn pcaps into datasets.
 
 To create influxd backups files store the pcaps of interest into the */pcaps/* directory, then build and run the environment:
 ```
-$ docker build -t pcap_extractor_lab . && docker run -it -p=8080:3443 --cap-add=NET_ADMIN --rm --name=tcplab pcap_extractor_lab
+$ docker build -t pcap_extractor_lab . && docker run -it -p=8080:3900 --cap-add=NET_ADMIN --rm --name=tcplab -v $(pwd)/output:/app/ext pcap_extractor_lab
 ```
 ***Note***: ntopng stores only the local network data. Please modify the file *container_init.sh* to include all the local network in interest
 
