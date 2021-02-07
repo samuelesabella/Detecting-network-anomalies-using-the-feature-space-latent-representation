@@ -15,13 +15,13 @@ LOCALNET="192.168.1.0/24"
 eval $(ssh-agent) && \
 ssh-add /app/keys/github_key && \
 ssh-keyscan -H github.com >> /etc/ssh/ssh_known_hosts && \
-cd /app/tesi_sabella && git checkout . && git pull && cd -
+cd /app/sabella && git checkout . && git pull && cd -
 
 redis-server 1>/dev/null &
 openssl req -new -newkey rsa:4096 -nodes -keyout /app/keys/influxdb.key -out /app/keys/influxdb.csr \
   -subj "/C=US/ST=Denial/L=Springfield/O=Dis/CN=www.example.com"
 openssl x509 -req -sha256 -days 365 -in /app/keys/influxdb.csr -signkey /app/keys/influxdb.key -out /app/keys/influxdb.pem
-influxd -config /app/tesi_sabella/lab/influxd_config 1>/dev/null 2>/dev/null &
+influxd -config /app/sabella/lab/influxd_config 1>/dev/null 2>/dev/null &
 
 
 # Starting dummy interface ..... #
@@ -46,7 +46,7 @@ for absfname in /app/pcaps/*.pcap; do
     fname=`basename "$absfname" .pcap`
     echo "> Replaying \"$fname\""
 
-    python3.7 /app/tesi_sabella/src/data_generator.py -b ntopng --credentials=admin:admin -o /app/ext/$fname -e $POLLEVERY &
+    python3.7 /app/sabella/src/data_generator.py -b ntopng --credentials=admin:admin -o /app/ext/$fname -e $POLLEVERY &
     data_gen_pid=$!
     echo "Poller: $data_gen_pid"
 

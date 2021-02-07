@@ -24,20 +24,16 @@ RUN dpkg -i influxdb_1.8.3_amd64.deb
 RUN apt-get install -y tcpreplay iproute2
 
 # Cloning private repo ..... #
-COPY keys/ /app/keys
 RUN apt-get install -y git
-RUN eval $(ssh-agent) && \
-    ssh-add /app/keys/github_key && \
-    ssh-keyscan -H github.com >> /etc/ssh/ssh_known_hosts && \
-    git clone git@github.com:samuelesabella/tesi_sabella /app/tesi_sabella
-RUN chmod +rwx /app/tesi_sabella/src/data_generator.py
+RUN git clone https://github.com/samuelesabella/Detecting-network-anomalies-using-the-feature-space-latent-representation/ /app/sabella
+RUN chmod +rwx /app/sabella/src/data_generator.py
 
 # Installing python3.7 ..... #
 RUN apt-get install -y software-properties-common
 RUN add-apt-repository ppa:deadsnakes/ppa
 RUN apt install -y python3.7 python3-pip
 RUN python3.7 -m pip install --upgrade pip
-RUN pip3 install -r /app/tesi_sabella/lab.requirements.txt 
+RUN pip3 install -r /app/sabella/lab.requirements.txt 
 RUN pip3 install pyts 
 
 COPY ./pcaps /app/pcaps/
