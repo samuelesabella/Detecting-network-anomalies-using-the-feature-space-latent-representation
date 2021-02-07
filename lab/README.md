@@ -2,7 +2,7 @@
 Turns pcaps file into a dataset usable to train/test our models
 
 # Before going any further
-Ntopng records time series data only for addresses specified via the [local-networks command line option](https://www.ntop.org/guides/ntopng/cli_options.html). Change the $LOCALNET$ in $container_init.sh$ according to your interests. A fast and simple way of listing the hosts IPs available in a pcap file is to use the following: 
+Ntopng records time series data only for addresses specified via the [local-networks command line option](https://www.ntop.org/guides/ntopng/cli_options.html). Change the `LOCALNET` in `container_init.sh` according to your interests. A fast and simple way of listing the hosts IPs available in a pcap file is to use the following: 
 ```
 $ tshark -Tfields -e eth.src_resolved -e eth.src -e ip.src -r pcaps/test_pcap.pcap | sort | uniq
 ```
