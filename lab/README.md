@@ -6,7 +6,8 @@ Ntopng records time series data only for addresses specified via the [local-netw
 ```
 $ tshark -Tfields -e eth.src_resolved -e eth.src -e ip.src -r pcaps/test_pcap.pcap | sort | uniq
 ```
-Furthermore, the traffic in the pcap is replayed with tcpreplay in real time due to ntopng constraints. So, to generate a dataset from a 24h pcap you will need 24h.
+Furthermore, the traffic in the pcap is replayed with tcpreplay in real time due to ntopng constraints. So, to generate a dataset from a 24h pcap you will need 24h. For seek of simplicity we extracted a 10 minutes subsample of the [IoT23 dataset](https://mcfp.felk.cvut.cz/publicDatasets/IoT-23-Dataset/) and made it available at the following [link](https://drive.google.com/file/d/10Y1o93MEuLlwc0p2X2fOeLaNoebYWQg4/view?usp=sharing). 
+
 
 # Producing datasets with docker
 Store the pcaps of interests in the directory `pcaps/`, then run:
