@@ -2,7 +2,7 @@
 The project aims to study the use of the feature space latent representation for the purpose of network monitoring. We trained different machine learning models to learn a latent representation that can be used both to detect similar devices and detect anomalies. The learning and deploying process is unsupervised and can be run using raw traffic pcaps.
 
 # Usage on new data using pretrained models
-Download and unzip the [checkpoints]() and place it in a new directory called `checkpoints` in the project root. Follow the instructions in `lab/` to create the dataset from raw pcaps files and place them in `dataset/`. Open the jupyter notebook `notebooks/CICIDS2017_VisualizationTool.ipynb` to visualize the dataset. Use `CICIDS2017_T-SNE_Visualizer.ipynb` to visualize the model output
+Download and unzip the [checkpoints](https://drive.google.com/file/d/1wEftybwKE3tN_dy4EKQQjo3OvIdZdXgR/view?usp=sharing) and place it in a new directory called `checkpoints` in the project root. Follow the instructions in `lab/` to create the dataset from raw pcaps files and place them in `dataset/`. Open the jupyter notebook `notebooks/CICIDS2017_VisualizationTool.ipynb` to visualize the dataset. Use `CICIDS2017_T-SNE_Visualizer.ipynb` to visualize the model output
 
 # Project structure
 ```
