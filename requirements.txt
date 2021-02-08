@@ -1,4 +1,7 @@
 certifi
+ipywidgets
+pyts
+influxdb_client
 scikit-learn
 skorch
 torch

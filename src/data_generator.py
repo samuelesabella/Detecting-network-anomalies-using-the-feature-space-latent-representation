@@ -29,9 +29,9 @@ AFTERNOON = np.array([0, 1, 0, 0])
 EVENING   = np.array([0, 0, 1, 0])
 NIGHT     = np.array([0, 0, 0, 1])
 hour2ts = [(MORNING,   range(6,  12)),
-           (AFTERNOON, range(12, 17)),
-           (EVENING,   range(17, 22)),
-           (NIGHT,     range(22, 6))]
+            (AFTERNOON, range(12, 17)),
+            (EVENING,   range(17, 22)),
+            (NIGHT,     list(range(22, 24))+list(range(0, 6)))]
 hour2ts = { h: t for t, hrange in hour2ts for h in hrange }
 
 class Preprocessor():
